@@ -749,6 +749,10 @@ final class LauncherStore {
         javaRuntimes.removeAll { $0.path == runtime.path }
     }
 
+    func instanceRoot(_ instanceID: UUID) -> URL {
+        fileSystem.instanceRoot(instanceID)
+    }
+
     func instanceIconImage(for instance: LauncherInstance) -> NSImage? {
         _ = iconRevision
         if instance.iconFileName != nil,

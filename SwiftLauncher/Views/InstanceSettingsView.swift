@@ -223,9 +223,6 @@ struct InstanceSettingsView: View {
 
         if let index = store.instances.firstIndex(where: { $0.id == instance.id }) {
             store.instances[index] = edited
-            Task {
-                await store.saveInstances()
-            }
         }
         dismiss()
     }
@@ -234,12 +231,8 @@ struct InstanceSettingsView: View {
         store.instances.removeAll { $0.id == instance.id }
 
         // 删除实例目录
-        let instanceDir = store.fileSystem.instanceRoot(instance.id)
+        let instanceDir = store.instanceRoot(instance.id)
         try? FileManager.default.removeItem(at: instanceDir)
-
-        Task {
-            await store.saveInstances()
-        }
 
         dismiss()
     }
