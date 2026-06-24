@@ -53,7 +53,7 @@ struct SettingsView: View {
                 }
 
                 Section("默认启动设置") {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("最大内存：\(defaultMemoryMB) MB")
                             .font(.subheadline)
 
@@ -87,7 +87,6 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 4)
 
                     Toggle("显示快照版本", isOn: $showSnapshots)
                 }
