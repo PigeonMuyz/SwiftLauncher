@@ -8,6 +8,9 @@ struct SettingsView: View {
     @AppStorage(DownloadEndpointResolver.defaultsKey) private var downloadSource = DownloadSource.automatic.rawValue
     @AppStorage(LauncherExperienceMode.defaultsKey) private var experienceMode = LauncherExperienceMode.beginner.rawValue
     @AppStorage(LauncherExperienceMode.autoDependenciesDefaultsKey) private var autoInstallRequiredMods = true
+    @AppStorage("instanceDisplayTemplate") private var instanceDisplayTemplate = "${mc_version} · ${mod_loader}"
+
+    private static let defaultTemplate = "${mc_version} · ${mod_loader}"
 
     var body: some View {
         TabView {
@@ -28,6 +31,31 @@ struct SettingsView: View {
                 Section("默认启动设置") {
                     Stepper("最大内存：\(defaultMemoryMB) MB", value: $defaultMemoryMB, in: 1024...32768, step: 512)
                     Toggle("显示快照版本", isOn: $showSnapshots)
+                }
+                Section("实例显示格式") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("自定义实例信息显示格式")
+                            .font(.subheadline.weight(.medium))
+                        Text("可用变量：${mc_version} MC版本号 · ${mod_loader} 模组加载器 · ${mod_num} 模组数量")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack {
+                            TextField("显示模板", text: $instanceDisplayTemplate)
+                                .textFieldStyle(.roundedBorder)
+
+                            Button("恢复默认") {
+                                instanceDisplayTemplate = Self.defaultTemplate
+                            }
+                            .buttonStyle(.borderless)
+                        }
+
+                        Text("示例：\(formatExample())")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    }
+                    .padding(.vertical, 4)
                 }
                 Section("数据目录") {
                     LabeledContent("位置") {
@@ -88,5 +116,12 @@ struct SettingsView: View {
 
     private var selectedExperienceMode: LauncherExperienceMode {
         LauncherExperienceMode(rawValue: experienceMode) ?? .beginner
+    }
+
+    private func formatExample() -> String {
+        instanceDisplayTemplate
+            .replacingOccurrences(of: "${mc_version}", with: "1.20.1")
+            .replacingOccurrences(of: "${mod_loader}", with: "Fabric")
+            .replacingOccurrences(of: "${mod_num}", with: "42")
     }
 }
