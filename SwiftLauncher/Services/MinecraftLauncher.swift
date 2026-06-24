@@ -5,10 +5,19 @@ struct LaunchResult: Sendable {
     let logURL: URL
 }
 
+struct GameTermination: Sendable {
+    let status: Int32
+    let wasSignaled: Bool
+
+    var succeeded: Bool { !wasSignaled && status == 0 }
+}
+
 actor MinecraftLauncher {
     private let fileSystem: LauncherFileSystem
     private let keychain: KeychainStore
     private var process: Process?
+    private var terminations: [Int32: GameTermination] = [:]
+    private var terminationWaiters: [Int32: [CheckedContinuation<GameTermination, Never>]] = [:]
 
     init(fileSystem: LauncherFileSystem, keychain: KeychainStore) {
         self.fileSystem = fileSystem
@@ -47,8 +56,17 @@ actor MinecraftLauncher {
         )
 
         let logURL = fileSystem.latestLogURL()
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let launchHeader = """
+        [SwiftLauncher] 游戏版本名称：\(instance.name)
+        [SwiftLauncher] 启动器品牌：SwiftLauncher/\(launcherVersion)
+
+        """
+        FileManager.default.createFile(
+            atPath: logURL.path,
+            contents: Data(launchHeader.utf8)
+        )
         let logHandle = try FileHandle(forWritingTo: logURL)
+        try logHandle.seekToEnd()
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: java.path)
@@ -57,6 +75,18 @@ actor MinecraftLauncher {
         process.environment = ProcessInfo.processInfo.environment
         process.standardOutput = logHandle
         process.standardError = logHandle
+        process.terminationHandler = { [weak self] terminated in
+            let identifier = terminated.processIdentifier
+            let status = terminated.terminationStatus
+            let wasSignaled = terminated.terminationReason == .uncaughtSignal
+            try? logHandle.close()
+            Task {
+                await self?.recordTermination(
+                    identifier: identifier,
+                    termination: GameTermination(status: status, wasSignaled: wasSignaled)
+                )
+            }
+        }
         try process.run()
         self.process = process
         return LaunchResult(processIdentifier: process.processIdentifier, logURL: logURL)
@@ -64,7 +94,27 @@ actor MinecraftLauncher {
 
     func terminate() {
         process?.terminate()
-        process = nil
+    }
+
+    func waitForTermination(processIdentifier: Int32) async -> GameTermination {
+        if let termination = terminations.removeValue(forKey: processIdentifier) {
+            return termination
+        }
+        return await withCheckedContinuation { continuation in
+            terminationWaiters[processIdentifier, default: []].append(continuation)
+        }
+    }
+
+    private func recordTermination(identifier: Int32, termination: GameTermination) {
+        if process?.processIdentifier == identifier {
+            process = nil
+        }
+        let waiters = terminationWaiters.removeValue(forKey: identifier) ?? []
+        if waiters.isEmpty {
+            terminations[identifier] = termination
+        } else {
+            for waiter in waiters { waiter.resume(returning: termination) }
+        }
     }
 
     private func buildCommand(
@@ -85,19 +135,19 @@ actor MinecraftLauncher {
             .filter { evaluator.allows($0.rules) }
             .compactMap { library -> String? in
                 guard let artifact = library.downloads?.artifact else { return nil }
-                let relative = artifact.path ?? Self.mavenPath(for: library.name)
+                let relative = artifact.path ?? MavenCoordinate.path(for: library.name)
                 let url = fileSystem.librariesRoot.appendingPathComponent(relative)
                 return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
             }
         if let loaderProfile {
             classpath += loaderProfile.libraries.compactMap { library in
-                let url = fileSystem.librariesRoot.appendingPathComponent(Self.mavenPath(for: library.name))
+                let url = fileSystem.librariesRoot.appendingPathComponent(MavenCoordinate.path(for: library.name))
                 return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
             }
         }
         if let installerLoaderMetadata {
             classpath += installerLoaderMetadata.libraries.compactMap { library in
-                let relative = library.downloads?.artifact?.path ?? Self.mavenPath(for: library.name)
+                let relative = library.downloads?.artifact?.path ?? MavenCoordinate.path(for: library.name)
                 let url = fileSystem.librariesRoot.appendingPathComponent(relative)
                 return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
             }
@@ -113,10 +163,11 @@ actor MinecraftLauncher {
         } else {
             accessToken = "0"
         }
+        let launcherIdentity = "SwiftLauncher/\(launcherVersion)"
 
         let replacements: [String: String] = [
             "${auth_player_name}": account.username,
-            "${version_name}": metadata.id,
+            "${version_name}": instance.name,
             "${game_directory}": gameDirectory.path,
             "${assets_root}": fileSystem.assetsRoot.path,
             "${assets_index_name}": metadata.assetIndex?.id ?? metadata.assets ?? "legacy",
@@ -124,15 +175,18 @@ actor MinecraftLauncher {
             "${auth_access_token}": accessToken,
             "${auth_session}": accessToken,
             "${user_type}": account.kind == .microsoft ? "msa" : "legacy",
-            "${version_type}": metadata.type?.rawValue ?? "release",
+            "${version_type}": launcherIdentity,
             "${natives_directory}": nativesDirectory.path,
             "${launcher_name}": "SwiftLauncher",
-            "${launcher_version}": "1.0",
+            "${launcher_version}": launcherVersion,
             "${classpath_separator}": ":",
             "${library_directory}": fileSystem.librariesRoot.path,
             "${classpath}": classpath.joined(separator: ":"),
             "${clientid}": "",
-            "${xuid}": ""
+            "${xuid}": "",
+            "${auth_client_id}": "",
+            "${auth_xuid}": "",
+            "${user_properties}": "{}"
         ]
 
         var jvm: [String] = ["-Xms512m", "-Xmx\(instance.memoryMB)m"]
@@ -147,6 +201,10 @@ actor MinecraftLauncher {
         if let loaderArguments = installerLoaderMetadata?.arguments?.jvm {
             jvm += resolve(loaderArguments, evaluator: evaluator, replacements: replacements)
         }
+        jvm += [
+            "-Dminecraft.launcher.brand=SwiftLauncher",
+            "-Dminecraft.launcher.version=\(launcherVersion)"
+        ]
         jvm += instance.additionalJVMArguments
 
         if let logging = metadata.logging?["client"],
@@ -171,12 +229,18 @@ actor MinecraftLauncher {
         if let loaderArguments = installerLoaderMetadata?.arguments?.game {
             game += resolve(loaderArguments, evaluator: evaluator, replacements: replacements)
         }
+        game = Self.replacingOption("--version", with: instance.name, in: game)
+        game = Self.replacingOption("--versionType", with: launcherIdentity, in: game)
 
         if let width = instance.resolutionWidth, let height = instance.resolutionHeight {
             game += ["--width", String(width), "--height", String(height)]
         }
         let mainClass = loaderProfile?.mainClass ?? installerLoaderMetadata?.mainClass ?? metadata.mainClass
         return jvm + [mainClass] + game
+    }
+
+    private var launcherVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
     }
 
     private func resolve(
@@ -198,6 +262,22 @@ actor MinecraftLauncher {
         replacements.reduce(value) { result, pair in
             result.replacingOccurrences(of: pair.key, with: pair.value)
         }
+    }
+
+    private static func replacingOption(_ option: String, with value: String, in arguments: [String]) -> [String] {
+        var sanitized: [String] = []
+        var index = arguments.startIndex
+        while index < arguments.endIndex {
+            if arguments[index] == option {
+                index += 1
+                if index < arguments.endIndex { index += 1 }
+                continue
+            }
+            sanitized.append(arguments[index])
+            index += 1
+        }
+        sanitized += [option, value]
+        return sanitized
     }
 
     private static func shellSplit(_ input: String) -> [String] {
@@ -225,10 +305,4 @@ actor MinecraftLauncher {
         return result
     }
 
-    private static func mavenPath(for coordinate: String) -> String {
-        let pieces = coordinate.split(separator: ":").map(String.init)
-        guard pieces.count >= 3 else { return coordinate.replacingOccurrences(of: ":", with: "/") }
-        let group = pieces[0].replacingOccurrences(of: ".", with: "/")
-        return "\(group)/\(pieces[1])/\(pieces[2])/\(pieces[1])-\(pieces[2]).jar"
-    }
 }

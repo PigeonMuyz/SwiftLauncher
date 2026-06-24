@@ -10,6 +10,22 @@ enum Hashing {
         try sha1(Data(contentsOf: url, options: [.mappedIfSafe]))
     }
 
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func sha256(fileAt url: URL) throws -> String {
+        try sha256(Data(contentsOf: url, options: [.mappedIfSafe]))
+    }
+
+    static func sha512(_ data: Data) -> String {
+        SHA512.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func sha512(fileAt url: URL) throws -> String {
+        try sha512(Data(contentsOf: url, options: [.mappedIfSafe]))
+    }
+
     static func offlineUUID(for username: String) -> String {
         let digest = Insecure.MD5.hash(data: Data("OfflinePlayer:\(username)".utf8))
         var bytes = Array(digest)

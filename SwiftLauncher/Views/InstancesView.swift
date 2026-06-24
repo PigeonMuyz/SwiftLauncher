@@ -22,7 +22,7 @@ struct InstancesView: View {
                     } description: {
                         Text("实例会保存独立的存档、模组和设置。")
                     } actions: {
-                        Button("新建实例") { store.isPresentingNewInstance = true }
+                        Button("新建实例") { store.presentNewInstance() }
                     }
                 } else {
                     List(filteredInstances, selection: $store.selectedInstanceID) { instance in
@@ -39,15 +39,15 @@ struct InstancesView: View {
                     .searchable(text: $searchText, prompt: "搜索实例或版本")
                 }
             }
-            .frame(minWidth: 310, idealWidth: 390)
+            .frame(minWidth: 220, idealWidth: 320, maxWidth: 420)
 
             if let instance = store.selectedInstance {
                 InstanceDetailView(store: store, instance: instance)
                     .id(instance.id)
-                    .frame(minWidth: 430)
+                    .frame(minWidth: 320)
             } else {
                 ContentUnavailableView("选择一个实例", systemImage: "sidebar.right")
-                    .frame(minWidth: 430)
+                    .frame(minWidth: 320)
             }
         }
     }
@@ -59,23 +59,21 @@ private struct InstanceRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "shippingbox.fill")
-                .font(.title2)
-                .foregroundStyle(store.isInstalled(instance) ? .green : .secondary)
-                .frame(width: 34)
+            InstanceIconView(
+                store: store,
+                instance: instance,
+                size: 38,
+                tint: store.isInstalled(instance) ? .green : .secondary
+            )
             VStack(alignment: .leading, spacing: 3) {
                 Text(instance.name)
                     .font(.headline)
                     .lineLimit(1)
-                HStack(spacing: 5) {
-                    Text("MC \(instance.versionID)")
-                    Text("·")
-                    Text(instance.loader.title)
-                    Text("·")
-                    Text(store.isInstalled(instance) ? "已安装" : "未安装")
-                }
+                Text("MC \(instance.versionID) · \(instance.loader.title) · \(store.installationStatus(for: instance))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
             }
             Spacer()
         }
@@ -88,6 +86,10 @@ private struct InstanceDetailView: View {
     @ViewState private var draft: LauncherInstance
     @ViewState private var isConfirmingDelete = false
     @ViewState private var isImportingMods = false
+    @ViewState private var isImportingResourcePacks = false
+    @ViewState private var isImportingShaderPacks = false
+    @ViewState private var isSelectingIcon = false
+    @ViewState private var isSelectingJava = false
     @ViewState private var modPendingDeletion: ModFile?
 
     init(store: LauncherStore, instance: LauncherInstance) {
@@ -98,34 +100,25 @@ private struct InstanceDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                HStack(spacing: 14) {
-                    Image(systemName: "shippingbox.fill")
-                        .font(.system(size: 38))
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(draft.name)
-                            .font(.title2.weight(.semibold))
-                        Text("Minecraft \(draft.versionID) · \(store.isInstalled(draft) ? "已安装" : "等待安装")")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button {
-                        Task {
-                            await store.updateInstance(draft)
-                            await store.launchSelectedInstance()
-                        }
-                    } label: {
-                        Label(store.isInstalled(draft) ? "启动游戏" : "安装并启动", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .controlSize(.large)
-                    .disabled(store.isBusy)
-                }
+                instanceHeader
 
                 Form {
                     Section("实例") {
                         TextField("名称", text: $draft.name)
+                        LabeledContent("实例图标") {
+                            HStack(spacing: 8) {
+                                InstanceIconView(store: store, instance: draft, size: 34)
+                                Button("选择图片…") { isSelectingIcon = true }
+                                if draft.iconFileName != nil {
+                                    Button("恢复默认") {
+                                        Task {
+                                            await store.removeInstanceIcon(draft)
+                                            draft.iconFileName = nil
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         LabeledContent("游戏版本", value: draft.versionID)
                         LabeledContent("来源", value: "Mojang 官方")
                         LabeledContent(
@@ -142,16 +135,31 @@ private struct InstanceDetailView: View {
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        LabeledContent("状态", value: store.isInstalled(draft) ? "文件完整" : "尚未安装")
+                        LabeledContent(
+                            "状态",
+                            value: store.installationStatus(for: draft)
+                        )
                     }
 
                     Section("运行") {
-                        Picker("Java 运行时", selection: $draft.javaPath) {
-                            Text("自动选择").tag(String?.none)
+                        Picker(
+                            "Java 运行时",
+                            selection: Binding(
+                                get: { draft.usesAutomaticJava ? nil : draft.javaPath },
+                                set: { newValue in
+                                    draft.usesAutomaticJava = newValue == nil
+                                    draft.javaPath = newValue
+                                }
+                            )
+                        ) {
+                            Text(automaticJavaLabel).tag(String?.none)
                             ForEach(store.javaRuntimes) { runtime in
                                 Text("\(runtime.displayName) — \(runtime.vendor)")
                                     .tag(String?.some(runtime.path))
                             }
+                        }
+                        LabeledContent("自定义 Java") {
+                            Button("选择 Java Home 或 java…") { isSelectingJava = true }
                         }
                         Picker("游戏账户", selection: $draft.accountID) {
                             Text("使用当前账户").tag(UUID?.none)
@@ -195,6 +203,10 @@ private struct InstanceDetailView: View {
                             Text("原版实例可以保存模组文件，但启动模组通常需要 Fabric 或 Quilt。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                        } else if draft.loader == .fabric {
+                            Text("Fabric Loader \(draft.loaderVersion ?? "") 已作为游戏加载器安装；Fabric API 是独立模组，需要时可在“下载 → 模组”中安装。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
 
                         if store.mods[draft.id, default: []].isEmpty {
@@ -211,13 +223,26 @@ private struct InstanceDetailView: View {
                                     }
                                     .buttonStyle(.plain)
 
+                                    AsyncImage(url: mod.iconURL) { phase in
+                                        if let image = phase.image {
+                                            image.resizable().scaledToFill()
+                                        } else {
+                                            Image(systemName: "puzzlepiece.extension.fill")
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .frame(width: 30, height: 30)
+                                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(mod.displayName)
                                             .lineLimit(1)
-                                        Text(mod.size.formatted(.byteCount(style: .file)))
+                                        Text(mod.detailText)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                     Spacer()
                                     Button(role: .destructive) {
                                         modPendingDeletion = mod
@@ -235,6 +260,18 @@ private struct InstanceDetailView: View {
                             Label("导入模组 JAR", systemImage: "square.and.arrow.down")
                         }
                     }
+
+                    managedContentSection(
+                        kind: .resourcePacks,
+                        files: store.resourcePacks[draft.id, default: []],
+                        systemImage: "photo.on.rectangle.angled"
+                    )
+
+                    managedContentSection(
+                        kind: .shaderPacks,
+                        files: store.shaderPacks[draft.id, default: []],
+                        systemImage: "sun.max.trianglebadge.exclamationmark"
+                    )
                 }
                 .formStyle(.grouped)
 
@@ -287,9 +324,159 @@ private struct InstanceDetailView: View {
                 Task { await store.importMods(urls, for: draft) }
             }
         }
+        .fileImporter(
+            isPresented: $isImportingResourcePacks,
+            allowedContentTypes: [.zip, .folder],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                Task {
+                    await store.importManagedContent(urls, kind: .resourcePacks, for: draft)
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $isImportingShaderPacks,
+            allowedContentTypes: [.zip, .folder],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                Task {
+                    await store.importManagedContent(urls, kind: .shaderPacks, for: draft)
+                }
+            }
+        }
+        .fileImporter(
+            isPresented: $isSelectingIcon,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            Task {
+                await store.setInstanceIcon(from: url, for: draft)
+                draft.iconFileName = "icon.png"
+            }
+        }
+        .fileImporter(
+            isPresented: $isSelectingJava,
+            allowedContentTypes: [.folder, .unixExecutable],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            Task {
+                if let runtime = await store.registerCustomJava(at: url) {
+                    draft.usesAutomaticJava = false
+                    draft.javaPath = runtime.path
+                }
+            }
+        }
         .task {
             await store.loadMods(for: draft)
+            await store.loadManagedContent(.resourcePacks, for: draft)
+            await store.loadManagedContent(.shaderPacks, for: draft)
         }
+    }
+
+    private var instanceHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                instanceHeaderSummary
+                Spacer(minLength: 12)
+                launchButton
+            }
+
+            VStack(alignment: .leading, spacing: 14) {
+                instanceHeaderSummary
+                launchButton
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var instanceHeaderSummary: some View {
+        HStack(spacing: 14) {
+            InstanceIconView(store: store, instance: draft, size: 54)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(draft.name)
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(1)
+                Text("Minecraft \(draft.versionID) · \(store.installationStatus(for: draft))")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private var launchButton: some View {
+        Button {
+            Task {
+                await store.updateInstance(draft)
+                store.selectedInstanceID = draft.id
+                await store.launchSelectedInstance()
+            }
+        } label: {
+            Label(store.launchButtonTitle(for: draft), systemImage: "play.fill")
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.green)
+        .controlSize(.large)
+        .disabled(store.isBusy || store.gameProcessID != nil)
+    }
+
+    @ViewBuilder
+    private func managedContentSection(
+        kind: ManagedContentKind,
+        files: [ManagedContentFile],
+        systemImage: String
+    ) -> some View {
+        Section(kind.title) {
+            if files.isEmpty {
+                Text("尚未导入\(kind.title)")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(files) { file in
+                    HStack(spacing: 10) {
+                        Image(systemName: systemImage)
+                            .foregroundStyle(.green)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.displayName)
+                                .lineLimit(1)
+                            Text(file.detailText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Button(role: .destructive) {
+                            Task {
+                                await store.removeManagedContent(file, kind: kind, for: draft)
+                            }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+
+            Button {
+                switch kind {
+                case .resourcePacks:
+                    isImportingResourcePacks = true
+                case .shaderPacks:
+                    isImportingShaderPacks = true
+                }
+            } label: {
+                Label("导入\(kind.title)", systemImage: "square.and.arrow.down")
+            }
+        }
+    }
+
+    private var automaticJavaLabel: String {
+        if let major = store.requiredJavaMajor(for: draft) {
+            return "自动选择（推荐 Java \(major)）"
+        }
+        return "自动选择（按官方版本要求）"
     }
 }
 
@@ -468,7 +655,12 @@ struct NewInstanceSheet: View {
         }
         .frame(width: 940, height: 680)
         .onAppear {
-            selectedVersionID = store.manifest?.latest.release ?? ""
+            selectedVersionID = store.consumeNewInstanceSuggestedVersionID()
+                ?? store.manifest?.latest.release
+                ?? ""
+            if let version = store.manifest?.versions.first(where: { $0.id == selectedVersionID }) {
+                selectedType = version.type
+            }
             if name.isEmpty, !selectedVersionID.isEmpty {
                 name = suggestedName(for: selectedVersionID)
             }

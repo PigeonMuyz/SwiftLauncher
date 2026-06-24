@@ -37,7 +37,11 @@ struct SidebarView: View {
                     Circle()
                         .fill(store.manifest == nil ? Color.orange : Color.green)
                         .frame(width: 8, height: 8)
-                    Text(store.manifest == nil ? "等待官方数据" : "Mojang 连接正常")
+                    Text(
+                        store.manifest == nil
+                            ? "等待版本数据"
+                            : "下载源：\(DownloadEndpointResolver.selectedSource.title)"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

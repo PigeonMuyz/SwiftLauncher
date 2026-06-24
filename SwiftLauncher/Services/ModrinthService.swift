@@ -1,0 +1,518 @@
+import Foundation
+
+struct ModrinthSearchResult: Decodable, Identifiable, Hashable, Sendable {
+    let projectID: String
+    let slug: String
+    let title: String
+    let description: String
+    let author: String
+    let downloads: Int
+    let iconURL: URL?
+
+    var id: String { projectID }
+
+    private enum CodingKeys: String, CodingKey {
+        case projectID = "project_id"
+        case slug, title, description, author, downloads
+        case iconURL = "icon_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try container.decode(String.self, forKey: .projectID)
+        slug = try container.decode(String.self, forKey: .slug)
+        title = try container.decode(String.self, forKey: .title)
+        description = try container.decode(String.self, forKey: .description)
+        author = try container.decode(String.self, forKey: .author)
+        downloads = try container.decode(Int.self, forKey: .downloads)
+        iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL)
+            .flatMap(URL.init(string:))
+    }
+}
+
+private struct ModrinthSearchEnvelope: Decodable, Sendable {
+    let hits: [ModrinthSearchResult]
+}
+
+struct ModrinthInstallPlan: Identifiable, Sendable {
+    let project: ModrinthSearchResult
+    let versions: [ModrinthVersionOption]
+    let selectedVersionID: String
+    let versionID: String
+    let versionName: String
+    let versionNumber: String
+    let requiredDependencies: [ModrinthDependencyPlan]
+
+    var id: String { project.projectID }
+}
+
+struct ModrinthDependencyPlan: Identifiable, Sendable {
+    let projectID: String
+    let slug: String
+    let title: String
+    let versionID: String
+    let versionName: String
+    let versionNumber: String
+    let iconURL: URL?
+    let depth: Int
+
+    var id: String { "\(projectID):\(versionID)" }
+    var projectURL: URL { URL(string: "https://modrinth.com/mod/\(slug)")! }
+}
+
+struct ModrinthVersionOption: Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let versionNumber: String
+    let gameVersions: [String]
+    let loaders: [String]
+    let versionType: String?
+    let datePublished: Date?
+    let primaryFileName: String?
+
+    var supportedMinecraftVersionsText: String {
+        gameVersions.prefix(6).joined(separator: ", ")
+            + (gameVersions.count > 6 ? " 等 \(gameVersions.count) 个版本" : "")
+    }
+
+    var loadersText: String {
+        loaders.joined(separator: ", ")
+    }
+}
+
+private struct ModrinthProject: Decodable, Sendable {
+    let id: String
+    let slug: String
+    let title: String
+    let iconURL: URL?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, slug, title
+        case iconURL = "icon_url"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        slug = try container.decode(String.self, forKey: .slug)
+        title = try container.decode(String.self, forKey: .title)
+        iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL).flatMap(URL.init(string:))
+    }
+}
+
+private struct ModrinthVersion: Decodable, Sendable {
+    let id: String
+    let projectID: String
+    let name: String
+    let versionNumber: String
+    let gameVersions: [String]
+    let loaders: [String]
+    let versionType: String?
+    let datePublished: Date?
+    let dependencies: [Dependency]
+    let files: [File]
+
+    struct Dependency: Decodable, Sendable {
+        let versionID: String?
+        let projectID: String?
+        let dependencyType: String
+
+        private enum CodingKeys: String, CodingKey {
+            case versionID = "version_id"
+            case projectID = "project_id"
+            case dependencyType = "dependency_type"
+        }
+    }
+
+    struct File: Decodable, Sendable {
+        let hashes: [String: String]
+        let url: URL
+        let filename: String
+        let primary: Bool?
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, dependencies, files, loaders
+        case projectID = "project_id"
+        case versionNumber = "version_number"
+        case gameVersions = "game_versions"
+        case versionType = "version_type"
+        case datePublished = "date_published"
+    }
+
+    var option: ModrinthVersionOption {
+        ModrinthVersionOption(
+            id: id,
+            name: name,
+            versionNumber: versionNumber,
+            gameVersions: gameVersions,
+            loaders: loaders,
+            versionType: versionType,
+            datePublished: datePublished,
+            primaryFileName: primaryFile?.filename
+        )
+    }
+
+    var primaryFile: File? {
+        files.first(where: { $0.primary == true })
+            ?? files.first(where: { $0.filename.lowercased().hasSuffix(".jar") })
+            ?? files.first
+    }
+}
+
+actor ModrinthService {
+    typealias ProgressHandler = @MainActor @Sendable (Double, String) -> Void
+
+    private static let apiRoot = URL(string: "https://api.modrinth.com/v2")!
+    private static let headers = [
+        "User-Agent": "PigeonMuyz/SwiftLauncher (github.com/PigeonMuyz/SwiftLauncher)"
+    ]
+
+    private let http: PublicHTTPClient
+    private let downloader: FileDownloadService
+    private let fileSystem: LauncherFileSystem
+
+    init(
+        http: PublicHTTPClient = .shared,
+        downloader: FileDownloadService = FileDownloadService(),
+        fileSystem: LauncherFileSystem = .shared
+    ) {
+        self.http = http
+        self.downloader = downloader
+        self.fileSystem = fileSystem
+    }
+
+    func search(query: String, gameVersion: String, loader: ModLoader) async throws -> [ModrinthSearchResult] {
+        var facets = [["project_type:mod"], ["versions:\(gameVersion)"]]
+        if loader != .vanilla {
+            facets.append(["categories:\(loader.modrinthName)"])
+        }
+        var components = URLComponents(
+            url: Self.apiRoot.appendingPathComponent("search"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "facets", value: try jsonString(facets)),
+            URLQueryItem(name: "index", value: "downloads"),
+            URLQueryItem(name: "limit", value: "30")
+        ]
+        guard let url = components.url else { throw LauncherError.invalidResponse }
+        let data = try await http.data(from: url, headers: Self.headers)
+        return try JSONCoding.makeDecoder().decode(ModrinthSearchEnvelope.self, from: data).hits
+    }
+
+    func install(
+        project: ModrinthSearchResult,
+        specificVersionID: String? = nil,
+        includeRequiredDependencies: Bool,
+        for instance: LauncherInstance,
+        progress: @escaping ProgressHandler
+    ) async throws -> Int {
+        guard instance.loader != .vanilla else {
+            throw LauncherError.unsupported("请先为实例安装 Fabric、Quilt、Forge 或 NeoForge")
+        }
+        let result = try await installProject(
+            projectID: project.projectID,
+            specificVersionID: specificVersionID,
+            instance: instance,
+            installedProjects: [],
+            includeRequiredDependencies: includeRequiredDependencies,
+            progress: progress
+        )
+        return result.count
+    }
+
+    func installPlan(
+        project: ModrinthSearchResult,
+        selectedVersionID: String? = nil,
+        for instance: LauncherInstance
+    ) async throws -> ModrinthInstallPlan {
+        let versions = try await compatibleVersions(
+            projectID: project.projectID,
+            gameVersion: instance.versionID,
+            loader: instance.loader
+        )
+        guard !versions.isEmpty else {
+            throw LauncherError.unsupported(
+                "Modrinth 上没有适配 MC \(instance.versionID) / \(instance.loader.title) 的文件"
+            )
+        }
+        let version = if let selectedVersionID,
+                         let selected = versions.first(where: { $0.id == selectedVersionID }) {
+            selected
+        } else {
+            versions[0]
+        }
+
+        var visited: Set<String> = [project.projectID]
+        var dependencies: [ModrinthDependencyPlan] = []
+        try await collectRequiredDependencies(
+            of: version,
+            instance: instance,
+            depth: 0,
+            visited: &visited,
+            output: &dependencies
+        )
+        return ModrinthInstallPlan(
+            project: project,
+            versions: versions.map(\.option),
+            selectedVersionID: version.id,
+            versionID: version.id,
+            versionName: version.name,
+            versionNumber: version.versionNumber,
+            requiredDependencies: dependencies
+        )
+    }
+
+    private func installProject(
+        projectID: String,
+        specificVersionID: String?,
+        instance: LauncherInstance,
+        installedProjects: Set<String>,
+        includeRequiredDependencies: Bool,
+        progress: @escaping ProgressHandler
+    ) async throws -> (count: Int, projects: Set<String>) {
+        var installedProjects = installedProjects
+        guard installedProjects.insert(projectID).inserted else { return (0, installedProjects) }
+        let version: ModrinthVersion
+        if let specificVersionID {
+            version = try await fetchVersion(id: specificVersionID)
+        } else {
+            guard let compatible = try await compatibleVersions(
+                projectID: projectID,
+                gameVersion: instance.versionID,
+                loader: instance.loader
+            ).first else {
+                throw LauncherError.unsupported("Modrinth 上没有适配 MC \(instance.versionID) / \(instance.loader.title) 的文件")
+            }
+            version = compatible
+        }
+        let project = try await fetchProject(id: projectID)
+
+        var installedCount = 0
+        for dependency in version.dependencies where includeRequiredDependencies && dependency.dependencyType == "required" {
+            let dependencyProject: String
+            if let projectID = dependency.projectID {
+                dependencyProject = projectID
+            } else if let versionID = dependency.versionID {
+                dependencyProject = try await fetchVersion(id: versionID).projectID
+            } else {
+                continue
+            }
+            let dependencyResult = try await installProject(
+                projectID: dependencyProject,
+                specificVersionID: dependency.versionID,
+                instance: instance,
+                installedProjects: installedProjects,
+                includeRequiredDependencies: true,
+                progress: progress
+            )
+            installedCount += dependencyResult.count
+            installedProjects = dependencyResult.projects
+        }
+
+        guard let file = version.primaryFile else {
+            throw LauncherError.missingDownload(version.name)
+        }
+        let modsDirectory = fileSystem.gameDirectory(instance).appendingPathComponent("mods", isDirectory: true)
+        try FileManager.default.createDirectory(at: modsDirectory, withIntermediateDirectories: true)
+        let destination = modsDirectory.appendingPathComponent(URL(fileURLWithPath: file.filename).lastPathComponent)
+        let temporaryDestination = modsDirectory
+            .appendingPathComponent(".swiftlauncher-download-\(UUID().uuidString).jar")
+        await progress(
+            min(0.15 + Double(installedProjects.count) * 0.12, 0.9),
+            "正在安装 \(version.name) \(version.versionNumber)"
+        )
+        try await downloader.download(
+            from: file.url,
+            to: temporaryDestination,
+            expectedSHA1: file.hashes["sha1"],
+            expectedSHA512: file.hashes["sha512"]
+        )
+        try await removeInstalledVersions(
+            of: projectID,
+            in: modsDirectory,
+            excluding: temporaryDestination
+        )
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.moveItem(at: temporaryDestination, to: destination)
+        try recordInstalledMod(
+            fileName: destination.lastPathComponent,
+            project: project,
+            version: version,
+            in: modsDirectory
+        )
+        installedCount += 1
+        return (installedCount, installedProjects)
+    }
+
+    private func collectRequiredDependencies(
+        of version: ModrinthVersion,
+        instance: LauncherInstance,
+        depth: Int,
+        visited: inout Set<String>,
+        output: inout [ModrinthDependencyPlan]
+    ) async throws {
+        for dependency in version.dependencies where dependency.dependencyType == "required" {
+            let dependencyVersion: ModrinthVersion
+            if let versionID = dependency.versionID {
+                dependencyVersion = try await fetchVersion(id: versionID)
+            } else if let projectID = dependency.projectID,
+                      let compatible = try await compatibleVersions(
+                        projectID: projectID,
+                        gameVersion: instance.versionID,
+                        loader: instance.loader
+                      ).first {
+                dependencyVersion = compatible
+            } else {
+                continue
+            }
+
+            let projectID = dependency.projectID ?? dependencyVersion.projectID
+            guard visited.insert(projectID).inserted else { continue }
+            let project = try await fetchProject(id: projectID)
+            output.append(
+                ModrinthDependencyPlan(
+                    projectID: projectID,
+                    slug: project.slug,
+                    title: project.title,
+                    versionID: dependencyVersion.id,
+                    versionName: dependencyVersion.name,
+                    versionNumber: dependencyVersion.versionNumber,
+                    iconURL: project.iconURL,
+                    depth: depth
+                )
+            )
+            try await collectRequiredDependencies(
+                of: dependencyVersion,
+                instance: instance,
+                depth: depth + 1,
+                visited: &visited,
+                output: &output
+            )
+        }
+    }
+
+    private func removeInstalledVersions(
+        of projectID: String,
+        in modsDirectory: URL,
+        excluding excludedURL: URL
+    ) async throws {
+        var index = ModrinthInstalledModsIndexStore.load(from: modsDirectory)
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: modsDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        for url in contents where url != excludedURL {
+            guard url.pathExtension.lowercased() == "jar" || url.pathExtension.lowercased() == "disabled" else {
+                continue
+            }
+            if index.records[url.lastPathComponent]?.projectID == projectID {
+                try? FileManager.default.removeItem(at: url)
+                index.records.removeValue(forKey: url.lastPathComponent)
+                continue
+            }
+
+            guard let resolvedProjectID = try? await resolveProjectID(forModFile: url),
+                  resolvedProjectID == projectID else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: url)
+            index.records.removeValue(forKey: url.lastPathComponent)
+        }
+
+        try ModrinthInstalledModsIndexStore.save(index, to: modsDirectory)
+    }
+
+    private func recordInstalledMod(
+        fileName: String,
+        project: ModrinthProject,
+        version: ModrinthVersion,
+        in modsDirectory: URL
+    ) throws {
+        var index = ModrinthInstalledModsIndexStore.load(from: modsDirectory)
+        index.records[fileName] = ModrinthInstalledModRecord(
+            projectID: project.id,
+            versionID: version.id,
+            title: project.title,
+            versionNumber: version.versionNumber,
+            iconURLString: project.iconURL?.absoluteString
+        )
+        try ModrinthInstalledModsIndexStore.save(index, to: modsDirectory)
+    }
+
+    private func resolveProjectID(forModFile url: URL) async throws -> String? {
+        let hash = try Hashing.sha512(fileAt: url)
+        var components = URLComponents(
+            url: Self.apiRoot.appendingPathComponent("version_file").appendingPathComponent(hash),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "algorithm", value: "sha512")]
+        guard let lookupURL = components.url else { throw LauncherError.invalidResponse }
+        let data = try await http.data(from: lookupURL, headers: Self.headers)
+        return try JSONCoding.makeDecoder().decode(ModrinthVersion.self, from: data).projectID
+    }
+
+    private func compatibleVersions(
+        projectID: String,
+        gameVersion: String,
+        loader: ModLoader
+    ) async throws -> [ModrinthVersion] {
+        var components = URLComponents(
+            url: Self.apiRoot
+                .appendingPathComponent("project")
+                .appendingPathComponent(projectID)
+                .appendingPathComponent("version"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "game_versions", value: try jsonString([gameVersion])),
+            URLQueryItem(name: "loaders", value: try jsonString([loader.modrinthName])),
+            URLQueryItem(name: "include_changelog", value: "false")
+        ]
+        guard let url = components.url else { throw LauncherError.invalidResponse }
+        let data = try await http.data(from: url, headers: Self.headers)
+        return try JSONCoding.makeDecoder().decode([ModrinthVersion].self, from: data)
+    }
+
+    private func fetchVersion(id: String) async throws -> ModrinthVersion {
+        let url = Self.apiRoot.appendingPathComponent("version").appendingPathComponent(id)
+        return try JSONCoding.makeDecoder().decode(
+            ModrinthVersion.self,
+            from: try await http.data(from: url, headers: Self.headers)
+        )
+    }
+
+    private func fetchProject(id: String) async throws -> ModrinthProject {
+        let url = Self.apiRoot.appendingPathComponent("project").appendingPathComponent(id)
+        return try JSONCoding.makeDecoder().decode(
+            ModrinthProject.self,
+            from: try await http.data(from: url, headers: Self.headers)
+        )
+    }
+
+    private func jsonString<T: Encodable>(_ value: T) throws -> String {
+        let data = try JSONEncoder().encode(value)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw LauncherError.invalidResponse
+        }
+        return string
+    }
+}
+
+private extension ModLoader {
+    nonisolated var modrinthName: String {
+        switch self {
+        case .vanilla: "minecraft"
+        case .fabric: "fabric"
+        case .quilt: "quilt"
+        case .forge: "forge"
+        case .neoForge: "neoforge"
+        }
+    }
+}

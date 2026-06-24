@@ -52,11 +52,14 @@ struct HomeView: View {
 
     @ViewBuilder
     private var hero: some View {
-        if let instance = store.selectedInstance {
+        if let instance = store.recentInstance {
             VStack(spacing: 18) {
-                Image(systemName: "shippingbox")
-                    .font(.system(size: 46, weight: .light))
-                    .foregroundStyle(.white.opacity(0.78))
+                InstanceIconView(
+                    store: store,
+                    instance: instance,
+                    size: 72,
+                    tint: .white.opacity(0.78)
+                )
 
                 VStack(spacing: 5) {
                     Text(instance.name)
@@ -91,10 +94,11 @@ struct HomeView: View {
 
                 HStack(spacing: 12) {
                     Button {
+                        store.selectedInstanceID = instance.id
                         Task { await store.launchSelectedInstance() }
                     } label: {
                         Label(
-                            store.isInstalled(instance) ? "启动游戏" : "安装并启动",
+                            store.launchButtonTitle(for: instance),
                             systemImage: "play.fill"
                         )
                         .font(.title3.weight(.semibold))
@@ -109,12 +113,12 @@ struct HomeView: View {
                     }
                     .shadow(color: mossButton.opacity(0.34), radius: 12, y: 5)
                     .opacity(store.isBusy ? 0.5 : 1)
-                    .disabled(store.isBusy)
+                    .disabled(store.isBusy || store.gameProcessID != nil)
 
                     instanceMenu(instance)
                 }
 
-                Text(store.isInstalled(instance) ? "Mojang 官方文件 · 已安装" : "Mojang 官方文件 · 等待安装")
+                Text("Mojang 官方内容 · \(store.installationStatus(for: instance))")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.58))
             }
@@ -129,7 +133,7 @@ struct HomeView: View {
                     .font(.title3)
                     .foregroundStyle(.white.opacity(0.72))
                 Button {
-                    store.isPresentingNewInstance = true
+                    store.presentNewInstance()
                 } label: {
                     Label("新建游戏实例", systemImage: "plus")
                         .font(.title3.weight(.semibold))
@@ -162,7 +166,7 @@ struct HomeView: View {
                     Text("尚未创建游戏实例")
                         .foregroundStyle(.white.opacity(0.64))
                     Spacer()
-                    Button("立即创建") { store.isPresentingNewInstance = true }
+                    Button("立即创建") { store.presentNewInstance() }
                         .buttonStyle(.plain)
                         .foregroundStyle(mossAccent)
                 }
@@ -197,13 +201,16 @@ struct HomeView: View {
 
     private func instanceMenu(_ instance: LauncherInstance) -> some View {
         Menu {
-            Button("管理实例") { store.selection = .instances }
+            Button("管理实例") {
+                store.selectedInstanceID = instance.id
+                store.selection = .instances
+            }
             Button("打开游戏目录") { store.openGameDirectory(instance) }
             if !store.isInstalled(instance) {
                 Button("仅安装") { Task { await store.install(instance) } }
             }
             Divider()
-            Button("创建新实例") { store.isPresentingNewInstance = true }
+            Button("创建新实例") { store.presentNewInstance() }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.title3.weight(.semibold))
@@ -257,11 +264,12 @@ private struct RecentInstanceRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: store.isInstalled(instance) ? "shippingbox.fill" : "arrow.down.circle.fill")
-                .font(.title3)
-                .foregroundStyle(store.isInstalled(instance) ? accent : .white.opacity(0.66))
-                .frame(width: 38, height: 38)
-                .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+            InstanceIconView(
+                store: store,
+                instance: instance,
+                size: 38,
+                tint: store.isInstalled(instance) ? accent : .white.opacity(0.66)
+            )
 
             Button(action: onSelect) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -288,7 +296,7 @@ private struct RecentInstanceRow: View {
                 }
                 .frame(width: 170)
             } else {
-                Text(store.isInstalled(instance) ? "安装完成" : "等待安装")
+                Text(store.installationStatus(for: instance))
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.72))
                     .frame(width: 100, alignment: .leading)
@@ -305,7 +313,7 @@ private struct RecentInstanceRow: View {
             }
             .buttonStyle(.bordered)
             .tint(accent)
-            .disabled(store.isBusy)
+            .disabled(store.isBusy || store.gameProcessID != nil)
 
             Menu {
                 Button("选择实例", action: onSelect)

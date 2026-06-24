@@ -23,7 +23,7 @@ struct SwiftLauncherApp: App {
                 .keyboardShortcut("r", modifiers: [.command])
 
                 Button("新建游戏实例") {
-                    store.isPresentingNewInstance = true
+                    store.presentNewInstance()
                 }
                 .keyboardShortcut("n", modifiers: [.command])
 
