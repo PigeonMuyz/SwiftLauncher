@@ -5,7 +5,7 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 上半部分：固定导航
+            // 上半部分：固定导航 + 动态资源管理
             List(selection: $store.selection) {
                 Label(AppSection.home.title, systemImage: AppSection.home.systemImage)
                     .tag(AppSection.home)
@@ -15,137 +15,137 @@ struct SidebarView: View {
                     .tag(AppSection.accounts)
                 Label(AppSection.settings.title, systemImage: AppSection.settings.systemImage)
                     .tag(AppSection.settings)
+
+                if let instance = store.selectedInstance {
+                    Section {
+                        // 模组管理（仅非原版）
+                        if instance.loader != .vanilla {
+                            Label(AppSection.mods.title, systemImage: AppSection.mods.systemImage)
+                                .tag(AppSection.mods)
+                        }
+
+                        // 资源包（所有实例）
+                        Label(AppSection.resourcePacks.title, systemImage: AppSection.resourcePacks.systemImage)
+                            .tag(AppSection.resourcePacks)
+
+                        // 光影包（仅支持光影的实例）
+                        let instanceMods = store.mods[instance.id] ?? []
+                        let hasShaders = instance.hasShaderSupport(mods: instanceMods)
+
+                        if hasShaders {
+                            Label(AppSection.shaders.title, systemImage: AppSection.shaders.systemImage)
+                                .tag(AppSection.shaders)
+                        }
+                    } header: {
+                        Text("当前实例")
+                            .font(.caption2)
+                    }
+                    .task(id: instance.id) {
+                        // 确保加载模组数据
+                        await store.loadMods(for: instance)
+                    }
+                }
             }
             .listStyle(.sidebar)
 
-            Divider()
+            // 底部：实例选择器
+            VStack(spacing: 0) {
+                Divider()
 
-            // 下半部分：实例上下文
-            InstanceContextView(store: store)
-        }
-        .navigationTitle("")
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    // 触发实例选择菜单
+                } label: {
+                    HStack(spacing: 10) {
+                        if let instance = store.selectedInstance {
+                            InstanceIconView(store: store, instance: instance, size: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(instance.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+                                Text(versionLine(for: instance))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        } else {
+                            Image(systemName: "shippingbox")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                            Text("选择实例")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .contextMenu {
+                    ForEach(store.instances) { instance in
+                        Button {
+                            store.selectedInstanceID = instance.id
+                        } label: {
+                            HStack {
+                                Image(systemName: instance.loader.systemImage)
+                                VStack(alignment: .leading) {
+                                    Text(instance.name)
+                                    Text(versionLine(for: instance))
+                                        .font(.caption)
+                                }
+                            }
+                        }
+                    }
+
+                    if !store.instances.isEmpty {
+                        Divider()
+                    }
+
+                    Button {
+                        store.presentNewInstance()
+                    } label: {
+                        Label("新建实例...", systemImage: "plus.circle")
+                    }
+                }
+
+                // 下载任务指示器（可选）
                 if let task = store.activeDownloads.first {
-                    VStack(alignment: .leading, spacing: 6) {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("下载任务")
-                                .font(.caption.weight(.semibold))
+                                .font(.caption2.weight(.semibold))
                             Spacer()
                             Text("\(store.activeDownloads.count)")
-                                .font(.caption.monospacedDigit())
+                                .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                         Text(task.detail)
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         ProgressView(value: task.progress)
+                            .controlSize(.small)
                             .tint(.green)
                     }
-                }
-
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(store.manifest == nil ? Color.orange : Color.green)
-                        .frame(width: 8, height: 8)
-                    Text(
-                        store.manifest == nil
-                            ? "等待版本数据"
-                            : "下载源：\(DownloadEndpointResolver.selectedSource.title)"
-                    )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(nsColor: .controlBackgroundColor))
                 }
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.bar)
-            .overlay(alignment: .top) { Divider() }
         }
+        .navigationTitle("")
     }
-}
 
-private struct InstanceContextView: View {
-    @Bindable var store: LauncherStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("当前实例")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-
-            // 实例选择 Picker
-            Picker("", selection: $store.selectedInstanceID) {
-                ForEach(store.instances) { instance in
-                    HStack {
-                        Image(systemName: instance.loader.systemImage)
-                        Text(instance.name)
-                    }
-                    .tag(Optional(instance.id))
-                }
-
-                if !store.instances.isEmpty {
-                    Divider()
-                }
-
-                Label("新建实例...", systemImage: "plus.circle")
-                    .tag(UUID?.none)
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .padding(.horizontal, 8)
-            .onChange(of: store.selectedInstanceID) { oldValue, newValue in
-                if newValue == nil {
-                    store.presentNewInstance()
-                    store.selectedInstanceID = oldValue
-                }
-            }
-
-            // 动态资源管理区
-            if let instance = store.selectedInstance {
-                VStack(alignment: .leading, spacing: 0) {
-                    // 模组管理（仅非原版）
-                    if instance.loader != .vanilla {
-                        NavigationLink(value: AppSection.mods) {
-                            Label("模组管理", systemImage: "cube.box")
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                    }
-
-                    // 资源包（所有实例）
-                    NavigationLink(value: AppSection.resourcePacks) {
-                        Label("资源包", systemImage: "photo.stack")
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-
-                    // 光影包（仅支持光影的实例）
-                    if instance.hasShaderSupport(mods: store.mods[instance.id] ?? []) {
-                        NavigationLink(value: AppSection.shaders) {
-                            Label("光影包", systemImage: "sparkles")
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                    }
-                }
-                .font(.callout)
-            } else {
-                Text("未选择实例")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12)
-            }
-
-            Spacer(minLength: 8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func versionLine(for instance: LauncherInstance) -> String {
+        let loader = instance.loader == .vanilla ? "原版" : instance.loader.title
+        return "MC \(instance.versionID) · \(loader)"
     }
 }
 
