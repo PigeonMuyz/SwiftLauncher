@@ -730,7 +730,14 @@ final class LauncherStore {
         let usingInstances = instancesUsing(javaRuntime: runtime)
         guard usingInstances.isEmpty else {
             let names = usingInstances.map { $0.name }.joined(separator: "、")
-            throw LauncherError.invalidOperation("以下实例正在使用此 Java：\(names)")
+            let higherVersions = javaRuntimes.filter { $0.majorVersion > runtime.majorVersion }
+            if let recommended = higherVersions.first {
+                throw LauncherError.invalidOperation(
+                    "以下实例正在使用此 Java：\(names)\n\n建议切换到 Java \(recommended.majorVersion)（向下兼容），然后再删除。"
+                )
+            } else {
+                throw LauncherError.invalidOperation("以下实例正在使用此 Java：\(names)")
+            }
         }
 
         // 找到 runtime 目录（向上查找到 runtimesRoot 的直接子目录）

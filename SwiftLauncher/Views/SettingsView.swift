@@ -121,7 +121,7 @@ struct SettingsView: View {
                                         }
 
                                         if !store.isManagedJava(runtime) {
-                                            Text("系统安装")
+                                            Text("系统")
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
                                                 .padding(.horizontal, 6)
