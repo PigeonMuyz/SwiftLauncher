@@ -73,7 +73,7 @@ struct SidebarView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(width: 200, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
                         .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
@@ -90,7 +90,7 @@ struct SidebarView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(width: 200, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
                         .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
@@ -181,11 +181,6 @@ private struct InstancePickerList: View {
                         .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
                     }
                     .buttonStyle(.plain)
-                }
-
-                if !store.instances.filter({ $0.id != store.selectedInstanceID }).isEmpty {
-                    Divider()
-                        .padding(.vertical, 4)
                 }
 
                 Button {
