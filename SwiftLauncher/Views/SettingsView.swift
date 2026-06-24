@@ -20,9 +20,6 @@ struct SettingsView: View {
     @ViewState private var availableTargetJavas: [JavaRuntime] = []
     @ViewState private var showingAddJava = false
     @ViewState private var selectedJavaMajorVersion = 21
-    @ViewState private var isInstallingJava = false
-    @ViewState private var javaInstallProgress: Double = 0
-    @ViewState private var javaInstallMessage = ""
 
     private let availableJavaVersions = [25, 21, 17, 11, 8]
 
@@ -247,22 +244,11 @@ struct SettingsView: View {
                                 Text("Java \(version)").tag(version)
                             }
                         }
-                        .pickerStyle(.segmented)
+                        .pickerStyle(.menu)
 
                         Text("将从 Adoptium 下载并安装 Eclipse Temurin JRE。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-
-                    if isInstallingJava {
-                        Section {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ProgressView(value: javaInstallProgress, total: 1.0) {
-                                    Text(javaInstallMessage)
-                                        .font(.caption)
-                                }
-                            }
-                        }
                     }
                 }
                 .formStyle(.grouped)
@@ -272,17 +258,16 @@ struct SettingsView: View {
                         Button("取消") {
                             showingAddJava = false
                         }
-                        .disabled(isInstallingJava)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("下载并安装") {
                             installJava(version: selectedJavaMajorVersion)
+                            showingAddJava = false
                         }
-                        .disabled(isInstallingJava)
                     }
                 }
             }
-            .frame(width: 450, height: 220)
+            .frame(width: 400, height: 180)
         }
     }
 
@@ -302,22 +287,10 @@ struct SettingsView: View {
     }
 
     private func installJava(version: Int) {
-        isInstallingJava = true
-        javaInstallProgress = 0
-        javaInstallMessage = "准备下载 Java \(version)..."
-
         Task {
             do {
-                _ = try await store.installJavaRuntime(
-                    majorVersion: version
-                ) { progress, message in
-                    javaInstallProgress = progress
-                    javaInstallMessage = message
-                }
-                isInstallingJava = false
-                showingAddJava = false
+                _ = try await store.installJavaRuntime(majorVersion: version) { _, _ in }
             } catch {
-                isInstallingJava = false
                 javaDeleteError = error
                 showingJavaDeleteError = true
             }
