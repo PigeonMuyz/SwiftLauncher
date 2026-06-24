@@ -50,75 +50,66 @@ struct SidebarView: View {
 
             // 底部：实例选择器（气泡样式）
             VStack(spacing: 0) {
-                if let instance = store.selectedInstance {
-                    Menu {
-                        // 显示所有实例，带图标和详细信息
+                if !store.instances.isEmpty {
+                    Picker("", selection: $store.selectedInstanceID.animation(.easeInOut(duration: 0.25))) {
                         ForEach(store.instances) { inst in
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.25)) {
-                                    store.selectedInstanceID = inst.id
-                                }
-                            } label: {
-                                HStack(spacing: 10) {
-                                    // 实例图标（在 Menu 中显示）
-                                    Image(systemName: inst.loader.systemImage)
-                                        .font(.title3)
-                                        .frame(width: 24)
+                            HStack(spacing: 10) {
+                                Image(systemName: inst.loader.systemImage)
+                                    .font(.title3)
+                                    .frame(width: 24)
 
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(inst.name)
-                                            .font(.subheadline.weight(.medium))
-                                        Text(versionLine(for: inst))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-
-                                    Spacer()
-
-                                    // 当前选中标记
-                                    if inst.id == instance.id {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
-                                    }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(inst.name)
+                                        .font(.subheadline.weight(.medium))
+                                    Text(versionLine(for: inst))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
+                            .tag(Optional(inst.id))
                         }
 
-                        if !store.instances.isEmpty {
-                            Divider()
-                        }
+                        Divider()
 
-                        Button {
+                        Label("新建实例...", systemImage: "plus.circle")
+                            .tag(UUID?.none)
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .onChange(of: store.selectedInstanceID) { oldValue, newValue in
+                        if newValue == nil {
                             store.presentNewInstance()
-                        } label: {
-                            Label("新建实例...", systemImage: "plus.circle")
+                            store.selectedInstanceID = oldValue
                         }
-                    } label: {
-                        HStack(spacing: 10) {
-                            InstanceIconView(store: store, instance: instance, size: 32)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(instance.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .lineLimit(1)
-                                Text(versionLine(for: instance))
+                    }
+                    .overlay {
+                        // 自定义显示气泡
+                        if let instance = store.selectedInstance {
+                            HStack(spacing: 10) {
+                                InstanceIconView(store: store, instance: instance, size: 32)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(instance.name)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
+                                    Text(versionLine(for: instance))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(1)
                             }
-                            Spacer()
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
+                            .allowsHitTesting(false)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
-                    .animation(.easeInOut(duration: 0.25), value: instance.id)
                 } else {
                     Button {
                         store.presentNewInstance()
