@@ -20,25 +20,75 @@ struct SettingsView: View {
     @ViewState private var availableTargetJavas: [JavaRuntime] = []
     @ViewState private var showingAddJava = false
     @ViewState private var selectedJavaMajorVersion = 21
+    @ViewState private var memoryInputText = ""
 
     private let availableJavaVersions = [25, 21, 17, 11, 8]
+
+    // 获取系统总内存（MB）
+    private var systemTotalMemoryMB: Int {
+        Int(ProcessInfo.processInfo.physicalMemory / 1024 / 1024)
+    }
+
+    // 最大可分配内存 = 系统总内存 - 4GB
+    private var maxAllocatableMemoryMB: Int {
+        max(4096, systemTotalMemoryMB - 4096)
+    }
 
     var body: some View {
         TabView {
             Form {
-                Section("使用模式") {
+                Section("通用") {
                     Picker("启动器模式", selection: $experienceMode) {
                         ForEach(LauncherExperienceMode.allCases) { mode in
                             Text(mode.title).tag(mode.rawValue)
                         }
                     }
-                    if selectedExperienceMode == .normal {
-                        Toggle("下载 Mod 时自动补全必需前置", isOn: $autoInstallRequiredMods)
-                    }
-                    Toggle("自动下载缺失的推荐 Java", isOn: $autoDownloadJava)
                 }
+
+                if selectedExperienceMode != .beginner {
+                    Section("自动化行为") {
+                        Toggle("下载 Mod 时自动补全必需前置", isOn: $autoInstallRequiredMods)
+                        Toggle("自动下载缺失的推荐 Java", isOn: $autoDownloadJava)
+                    }
+                }
+
                 Section("默认启动设置") {
-                    Stepper("最大内存：\(defaultMemoryMB) MB", value: $defaultMemoryMB, in: 1024...32768, step: 512)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("最大内存：\(defaultMemoryMB) MB")
+                            .font(.subheadline)
+
+                        HStack(spacing: 12) {
+                            Slider(value: Binding(
+                                get: { Double(defaultMemoryMB) },
+                                set: { defaultMemoryMB = Int($0) }
+                            ), in: 1024...Double(maxAllocatableMemoryMB), step: 512)
+
+                            TextField("", text: $memoryInputText, onCommit: {
+                                if let value = Int(memoryInputText) {
+                                    defaultMemoryMB = min(max(value, 1024), maxAllocatableMemoryMB)
+                                }
+                                memoryInputText = "\(defaultMemoryMB)"
+                            })
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                            .onAppear {
+                                memoryInputText = "\(defaultMemoryMB)"
+                            }
+                            .onChange(of: defaultMemoryMB) { _, newValue in
+                                memoryInputText = "\(newValue)"
+                            }
+
+                            Text("MB")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text("系统总内存：\(systemTotalMemoryMB) MB · 建议最大：\(maxAllocatableMemoryMB) MB")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+
                     Toggle("显示快照版本", isOn: $showSnapshots)
                 }
                 Section("实例显示格式") {
