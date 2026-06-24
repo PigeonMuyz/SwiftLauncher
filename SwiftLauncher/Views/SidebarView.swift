@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var store: LauncherStore
     @ViewState private var isShowingInstancePicker = false
+    @AppStorage("instanceDisplayTemplate") private var instanceDisplayTemplate = "${mc_version} · ${mod_loader}"
 
     var body: some View {
         GeometryReader { geometry in
@@ -107,7 +108,8 @@ struct SidebarView: View {
                     InstancePickerList(
                         store: store,
                         isPresented: $isShowingInstancePicker,
-                        width: geometry.size.width - 20
+                        width: geometry.size.width - 20,
+                        displayTemplate: instanceDisplayTemplate
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -144,8 +146,13 @@ struct SidebarView: View {
     }
 
     private func versionLine(for instance: LauncherInstance) -> String {
+        let modCount = store.mods[instance.id]?.count ?? 0
         let loader = instance.loader == .vanilla ? "原版" : instance.loader.title
-        return "MC \(instance.versionID) · \(loader)"
+
+        return instanceDisplayTemplate
+            .replacingOccurrences(of: "${mc_version}", with: instance.versionID)
+            .replacingOccurrences(of: "${mod_loader}", with: loader)
+            .replacingOccurrences(of: "${mod_num}", with: "\(modCount)")
     }
 }
 
@@ -153,6 +160,7 @@ private struct InstancePickerList: View {
     let store: LauncherStore
     @Binding var isPresented: Bool
     let width: CGFloat
+    let displayTemplate: String
 
     var body: some View {
         ScrollView {
@@ -216,8 +224,13 @@ private struct InstancePickerList: View {
     }
 
     private func versionLine(for instance: LauncherInstance) -> String {
+        let modCount = store.mods[instance.id]?.count ?? 0
         let loader = instance.loader == .vanilla ? "原版" : instance.loader.title
-        return "MC \(instance.versionID) · \(loader)"
+
+        return displayTemplate
+            .replacingOccurrences(of: "${mc_version}", with: instance.versionID)
+            .replacingOccurrences(of: "${mod_loader}", with: loader)
+            .replacingOccurrences(of: "${mod_num}", with: "\(modCount)")
     }
 }
 
