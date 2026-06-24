@@ -197,7 +197,6 @@ final class LauncherStore {
             DownloadTaskInfo(id: taskID, title: url.deletingPathExtension().lastPathComponent, detail: "准备导入整合包"),
             at: 0
         )
-        selection = .downloads
         do {
             updateDownload(taskID) { $0.state = .downloading }
             let result = try await instanceImportService.importModpack(
@@ -245,7 +244,6 @@ final class LauncherStore {
             DownloadTaskInfo(id: taskID, title: url.lastPathComponent, detail: "准备导入 .minecraft"),
             at: 0
         )
-        selection = .downloads
         do {
             updateDownload(taskID) { $0.state = .downloading }
             let result = try await instanceImportService.importMinecraftFolder(
@@ -474,7 +472,6 @@ final class LauncherStore {
             DownloadTaskInfo(id: taskID, title: instance.name, detail: "准备安装 \(instance.versionID)"),
             at: 0
         )
-        selection = .downloads
 
         do {
             updateDownload(taskID) { task in task.state = .downloading }
@@ -706,6 +703,84 @@ final class LauncherStore {
             present(error)
             return nil
         }
+    }
+
+    func instancesUsing(javaRuntime: JavaRuntime) -> [LauncherInstance] {
+        return instances.filter { instance in
+            if let runtime = preferredRuntime(for: instance) {
+                return runtime.path == javaRuntime.path
+            }
+            return false
+        }
+    }
+
+    func isManagedJava(_ runtime: JavaRuntime) -> Bool {
+        let managedRoot = fileSystem.runtimesRoot.path
+        return runtime.path.hasPrefix(managedRoot)
+    }
+
+    func deleteJavaRuntime(_ runtime: JavaRuntime, migrateTo targetRuntime: JavaRuntime? = nil) async throws {
+        guard isManagedJava(runtime) else {
+            throw LauncherError.invalidOperation("只能删除启动器托管的 Java 运行时")
+        }
+
+        let usingInstances = instancesUsing(javaRuntime: runtime)
+
+        if !usingInstances.isEmpty {
+            guard let target = targetRuntime else {
+                let higherVersions = javaRuntimes.filter { $0.majorVersion > runtime.majorVersion }
+                guard !higherVersions.isEmpty else {
+                    throw LauncherError.invalidOperation(
+                        "以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))\n\n没有更高版本的 Java 可供切换。"
+                    )
+                }
+                throw LauncherError.invalidOperation(
+                    "以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))"
+                )
+            }
+
+            // 执行迁移到指定的目标 Java
+            for instance in usingInstances {
+                if let index = instances.firstIndex(where: { $0.id == instance.id }) {
+                    instances[index].javaPath = target.path
+                    instances[index].usesAutomaticJava = false
+                }
+            }
+        }
+
+        // 删除 Java 运行时目录
+        let runtimePath = URL(fileURLWithPath: runtime.path)
+        var directoryToDelete = runtimePath
+        let managedRoot = fileSystem.runtimesRoot
+
+        while directoryToDelete.deletingLastPathComponent() != managedRoot {
+            directoryToDelete = directoryToDelete.deletingLastPathComponent()
+            if directoryToDelete == managedRoot {
+                throw LauncherError.invalidOperation("无法确定 Java 运行时的安装目录")
+            }
+        }
+
+        try FileManager.default.removeItem(at: directoryToDelete)
+        javaRuntimes.removeAll { $0.path == runtime.path }
+    }
+
+    func instanceRoot(_ instanceID: UUID) -> URL {
+        fileSystem.instanceRoot(instanceID)
+    }
+
+    func installJavaRuntime(
+        majorVersion: Int,
+        progress: @escaping @MainActor (Double, String) -> Void
+    ) async throws -> JavaRuntime {
+        let runtime = try await javaService.ensureRuntime(
+            majorVersion: majorVersion,
+            customPath: nil,
+            allowsDownload: true,
+            progress: progress
+        )
+        // 刷新 Java 列表
+        javaRuntimes = await javaService.discover()
+        return runtime
     }
 
     func instanceIconImage(for instance: LauncherInstance) -> NSImage? {

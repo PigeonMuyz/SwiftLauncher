@@ -15,6 +15,7 @@ enum LauncherError: LocalizedError {
     case minecraftAppRegistrationRequired
     case authentication(String)
     case unsupported(String)
+    case invalidOperation(String)
 
     var errorDescription: String? {
         switch self {
@@ -34,6 +35,7 @@ enum LauncherError: LocalizedError {
                 + "请提交官方第三方应用审核表；这不是 Object ID 或 Tenant ID 配置错误。"
         case .authentication(let message): "账户认证失败：\(message)"
         case .unsupported(let message): "暂不支持：\(message)"
+        case .invalidOperation(let message): "操作失败：\(message)"
         }
     }
 }

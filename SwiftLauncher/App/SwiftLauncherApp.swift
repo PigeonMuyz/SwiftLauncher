@@ -1,8 +1,10 @@
 import SwiftUI
+import AppKit
 
 @main
 struct SwiftLauncherApp: App {
     @ViewState private var store = LauncherStore()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
         WindowGroup("SwiftLauncher", id: "main") {
@@ -10,9 +12,12 @@ struct SwiftLauncherApp: App {
                 .task {
                     await store.bootstrap()
                 }
-                .frame(minWidth: 980, minHeight: 680)
+                .frame(minWidth: 1000, minHeight: 700)
+                .onAppear {
+                    centerMainWindow()
+                }
         }
-        .defaultSize(width: 1180, height: 780)
+        .defaultSize(width: 1280, height: 820)
         .commands {
             SidebarCommands()
 
@@ -44,6 +49,21 @@ struct SwiftLauncherApp: App {
 
         Settings {
             SettingsView(store: store)
+        }
+    }
+
+    private func centerMainWindow() {
+        if let window = NSApplication.shared.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+            window.center()
+        }
+    }
+}
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // 居中主窗口
+        if let window = NSApplication.shared.windows.first {
+            window.center()
         }
     }
 }

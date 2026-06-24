@@ -65,66 +65,57 @@ struct DownloadsView: View {
     }
 
     private var gameDownloads: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                VStack(spacing: 10) {
-                    Picker("版本类型", selection: $versionType) {
-                        ForEach(VersionType.allCases, id: \.self) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    TextField("搜索 Minecraft 版本", text: $versionSearch)
-                        .textFieldStyle(.roundedBorder)
-                }
-                .padding(14)
-
-                Divider()
-
-                List(filteredVersions.prefix(300), selection: $selectedVersionID) { version in
-                    VersionRow(version: version)
-                        .tag(version.id)
-                }
-                .overlay {
-                    if store.manifest == nil {
-                        ProgressView("正在读取版本清单…")
-                    } else if filteredVersions.isEmpty {
-                        ContentUnavailableView.search(text: versionSearch)
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                Picker("版本类型", selection: $versionType) {
+                    ForEach(VersionType.allCases, id: \.self) { type in
+                        Text(type.title).tag(type)
                     }
                 }
+                .pickerStyle(.segmented)
+                TextField("搜索 Minecraft 版本", text: $versionSearch)
+                    .textFieldStyle(.roundedBorder)
             }
-            .frame(minWidth: 360, idealWidth: 430)
+            .padding(14)
 
-            if let version = selectedGameVersion {
-                VStack(alignment: .leading, spacing: 22) {
-                    Spacer()
-                    Image(systemName: "shippingbox.fill")
-                        .font(.system(size: 56))
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 8) {
+            Divider()
+
+            List(filteredVersions.prefix(300)) { version in
+                HStack(spacing: 12) {
+                    Image(systemName: version.type == .release ? "tag" : "circle.dotted")
+                        .foregroundStyle(version.type == .release ? .green : .blue)
+                        .frame(width: 18)
+
+                    VStack(alignment: .leading, spacing: 2) {
                         Text("Minecraft \(version.id)")
-                            .font(.largeTitle.weight(.semibold))
-                        Text("\(version.type.title) · 发布于 \(version.releaseTime.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.body.monospacedDigit())
+                        Text("\(version.type.title) · Mojang 官方")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Text("下一步可以选择原版、Fabric、Quilt、Forge 或 NeoForge，并设置实例名称。基础游戏文件会进入共享缓存，同一版本无需重复下载。")
+
+                    Spacer()
+
+                    Text(version.releaseTime, format: .dateTime.year().month().day())
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+
                     Button {
                         store.presentNewInstance(versionID: version.id)
                     } label: {
-                        Label("选择加载器并安装", systemImage: "arrow.down.circle.fill")
+                        Label("创建并安装", systemImage: "plus.circle.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
-                    .controlSize(.large)
-                    Spacer()
                 }
-                .padding(36)
-                .frame(minWidth: 420, maxWidth: .infinity, alignment: .leading)
-            } else {
-                ContentUnavailableView("选择一个游戏版本", systemImage: "shippingbox")
-                    .frame(minWidth: 420)
+                .padding(.vertical, 4)
+            }
+            .overlay {
+                if store.manifest == nil {
+                    ProgressView("正在读取版本清单…")
+                } else if filteredVersions.isEmpty {
+                    ContentUnavailableView.search(text: versionSearch)
+                }
             }
         }
     }
