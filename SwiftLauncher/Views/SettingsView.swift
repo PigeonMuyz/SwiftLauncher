@@ -32,9 +32,6 @@ struct SettingsView: View {
                             Text(mode.title).tag(mode.rawValue)
                         }
                     }
-                    Text(selectedExperienceMode.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     if selectedExperienceMode == .normal {
                         Toggle("下载 Mod 时自动补全必需前置", isOn: $autoInstallRequiredMods)
                     }
@@ -47,9 +44,6 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("自定义实例信息显示格式")
                             .font(.subheadline.weight(.medium))
-                        Text("可用变量：${mc_version} MC版本号 · ${mod_loader} 模组加载器 · ${mod_num} 模组数量")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
 
                         HStack {
                             TextField("显示模板", text: $instanceDisplayTemplate)
@@ -79,12 +73,6 @@ struct SettingsView: View {
                             Text(source.title).tag(source.rawValue)
                         }
                     }
-                    Text(selectedDownloadSource.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("无论使用哪个下载源，启动器都会按 Mojang 或上游提供的哈希校验文件。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -93,9 +81,6 @@ struct SettingsView: View {
             Form {
                 Section("自动管理") {
                     Toggle("自动下载缺失的推荐 Java", isOn: $autoDownloadJava)
-                    Text("启动器优先匹配 Mojang 元数据指定的 Java 主版本，并将托管运行时保存在应用数据目录。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
                 Section("已检测到的 Java") {
                     if store.javaRuntimes.isEmpty {
