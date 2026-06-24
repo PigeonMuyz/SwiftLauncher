@@ -195,7 +195,6 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .tabItem { Label("Java", systemImage: "cup.and.heat.waves") }
         }
-        .frame(width: 660, height: 480)
         .alert("删除失败", isPresented: $showingJavaDeleteError, presenting: javaDeleteError) { _ in
             Button("确定", role: .cancel) {}
         } message: { error in
