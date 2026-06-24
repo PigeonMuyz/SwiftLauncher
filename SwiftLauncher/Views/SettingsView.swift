@@ -35,6 +35,7 @@ struct SettingsView: View {
                     if selectedExperienceMode == .normal {
                         Toggle("下载 Mod 时自动补全必需前置", isOn: $autoInstallRequiredMods)
                     }
+                    Toggle("自动下载缺失的推荐 Java", isOn: $autoDownloadJava)
                 }
                 Section("默认启动设置") {
                     Stepper("最大内存：\(defaultMemoryMB) MB", value: $defaultMemoryMB, in: 1024...32768, step: 512)
@@ -79,10 +80,7 @@ struct SettingsView: View {
             .tabItem { Label("通用", systemImage: "gearshape") }
 
             Form {
-                Section("自动管理") {
-                    Toggle("自动下载缺失的推荐 Java", isOn: $autoDownloadJava)
-                }
-                Section("已检测到的 Java") {
+                Section("Java 版本") {
                     if store.javaRuntimes.isEmpty {
                         Text("未检测到 Java 运行时")
                             .foregroundStyle(.secondary)
