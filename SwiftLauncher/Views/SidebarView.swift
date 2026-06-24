@@ -48,15 +48,36 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
 
-            // 底部：实例选择器
+            // 底部：实例选择器（气泡样式）
             VStack(spacing: 0) {
-                Divider()
+                if let instance = store.selectedInstance {
+                    Menu {
+                        ForEach(store.instances) { inst in
+                            Button {
+                                store.selectedInstanceID = inst.id
+                            } label: {
+                                HStack {
+                                    Image(systemName: inst.loader.systemImage)
+                                    VStack(alignment: .leading) {
+                                        Text(inst.name)
+                                        Text(versionLine(for: inst))
+                                            .font(.caption)
+                                    }
+                                }
+                            }
+                        }
 
-                Button {
-                    // 触发实例选择菜单
-                } label: {
-                    HStack(spacing: 10) {
-                        if let instance = store.selectedInstance {
+                        if !store.instances.isEmpty {
+                            Divider()
+                        }
+
+                        Button {
+                            store.presentNewInstance()
+                        } label: {
+                            Label("新建实例...", systemImage: "plus.circle")
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
                             InstanceIconView(store: store, instance: instance, size: 32)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(instance.name)
@@ -67,56 +88,44 @@ struct SidebarView: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
-                        } else {
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                } else {
+                    Button {
+                        store.presentNewInstance()
+                    } label: {
+                        HStack(spacing: 10) {
                             Image(systemName: "shippingbox")
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
                             Text("选择实例")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                            Spacer()
                         }
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 10)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .contextMenu {
-                    ForEach(store.instances) { instance in
-                        Button {
-                            store.selectedInstanceID = instance.id
-                        } label: {
-                            HStack {
-                                Image(systemName: instance.loader.systemImage)
-                                VStack(alignment: .leading) {
-                                    Text(instance.name)
-                                    Text(versionLine(for: instance))
-                                        .font(.caption)
-                                }
-                            }
-                        }
-                    }
-
-                    if !store.instances.isEmpty {
-                        Divider()
-                    }
-
-                    Button {
-                        store.presentNewInstance()
-                    } label: {
-                        Label("新建实例...", systemImage: "plus.circle")
-                    }
                 }
 
                 // 下载任务指示器（可选）
                 if let task = store.activeDownloads.first {
-                    Divider()
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("下载任务")
@@ -134,9 +143,11 @@ struct SidebarView: View {
                             .controlSize(.small)
                             .tint(.green)
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(Color(nsColor: .controlBackgroundColor))
+                    .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
                 }
             }
         }
