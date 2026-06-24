@@ -152,7 +152,8 @@ private struct InstancePickerList: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 8) {
-                ForEach(store.instances) { instance in
+                // 只显示未选中的实例
+                ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
                     Button {
                         withAnimation(.easeInOut(duration: 0.25)) {
                             store.selectedInstanceID = instance.id
@@ -173,10 +174,6 @@ private struct InstancePickerList: View {
                                     .lineLimit(1)
                             }
                             Spacer()
-                            if instance.id == store.selectedInstanceID {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
@@ -186,8 +183,10 @@ private struct InstancePickerList: View {
                     .buttonStyle(.plain)
                 }
 
-                Divider()
-                    .padding(.vertical, 4)
+                if !store.instances.filter({ $0.id != store.selectedInstanceID }).isEmpty {
+                    Divider()
+                        .padding(.vertical, 4)
+                }
 
                 Button {
                     store.presentNewInstance()
@@ -214,6 +213,7 @@ private struct InstancePickerList: View {
             .padding(.vertical, 8)
         }
         .frame(maxHeight: 280)
+        .frame(width: 200)  // 固定宽度，等宽设计
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
