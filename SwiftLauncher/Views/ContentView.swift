@@ -16,10 +16,10 @@ struct ContentView: View {
     private var rootContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(store: store)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
         } detail: {
             detailContainer
-                .navigationSplitViewColumnWidth(min: 600, ideal: 800)
+                .frame(minWidth: 700)
         }
         .navigationSplitViewStyle(.balanced)
         .preferredColorScheme(.dark)
