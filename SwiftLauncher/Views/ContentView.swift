@@ -124,6 +124,12 @@ struct ContentView: View {
             openWindow(id: "logs")
             store.shouldOpenGameLog = false
         }
+        .overlay {
+            // 游戏加载窗口
+            if store.showGameLoadingWindow {
+                GameLoadingWindow(store: store)
+            }
+        }
     }
 
     @ViewBuilder

@@ -39,8 +39,12 @@ final class LauncherStore {
     var shouldOpenGameLog = false
     var iconRevision = 0
     var logText = "还没有游戏日志。"
+    var showGameLoadingWindow = false
+    var gameLoadProgress: GameLogParser.GameLoadProgress = .init()
+    var gameLogEntries: [GameLogParser.LogEntry] = []
 
     @ObservationIgnored private let fileSystem = LauncherFileSystem.shared
+    @ObservationIgnored private var logMonitorTask: Task<Void, Never>?
     @ObservationIgnored private let metadataService = MojangMetadataService()
     @ObservationIgnored private let downloader = FileDownloadService()
     @ObservationIgnored private let javaService = JavaRuntimeService()
@@ -544,6 +548,11 @@ final class LauncherStore {
             gameProcessID = result.processIdentifier
             runningInstanceID = instance.id
             let launchedProcessID = result.processIdentifier
+
+            // 显示加载窗口并开始监控日志
+            showGameLoadingWindow = true
+            startLogMonitoring()
+
             Task { [weak self] in
                 guard let self else { return }
                 let termination = await launcher.waitForTermination(processIdentifier: launchedProcessID)
@@ -552,6 +561,7 @@ final class LauncherStore {
                     gameProcessID = nil
                     runningInstanceID = nil
                     loadLog()
+                    stopLogMonitoring()
                 }
                 if !wasStoppedByUser, !termination.succeeded {
                     presentGameCrash(termination)
@@ -963,6 +973,95 @@ final class LauncherStore {
             errorHelpURL = URL(string: "https://aka.ms/mce-reviewappid")
         } else {
             errorHelpURL = nil
+        }
+    }
+
+    // MARK: - Game Log Monitoring
+
+    private func startLogMonitoring() {
+        stopLogMonitoring() // 确保之前的任务已停止
+
+        logMonitorTask = Task { [weak self] in
+            guard let self else { return }
+
+            let logURL = fileSystem.latestLogURL()
+            var previousEntryCount = 0
+            var checkCount = 0
+
+            while !Task.isCancelled {
+                // 读取日志内容
+                guard let data = try? Data(contentsOf: logURL),
+                      let content = String(data: data, encoding: .utf8) else {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    continue
+                }
+
+                // 解析日志
+                let (entries, newCount) = GameLogParser.parseLogStream(content, previousEntryCount: previousEntryCount)
+
+                if newCount > 0 {
+                    await MainActor.run {
+                        self.gameLogEntries = entries
+                        self.gameLoadProgress = GameLogParser.analyzeLoadProgress(entries)
+
+                        // 检测游戏是否已准备好
+                        if self.gameLoadProgress.isGameReady {
+                            // 延迟关闭加载窗口，让用户看到"完成"状态
+                            Task {
+                                try? await Task.sleep(for: .seconds(2))
+                                await MainActor.run {
+                                    self.showGameLoadingWindow = false
+                                    self.stopLogMonitoring()
+                                    // 将游戏窗口置前
+                                    self.bringGameWindowToFront()
+                                }
+                            }
+                        }
+                    }
+                    previousEntryCount = entries.count
+                }
+
+                checkCount += 1
+                // 30秒后如果还没准备好，自动关闭加载窗口
+                if checkCount > 60 { // 60 * 0.5s = 30s
+                    await MainActor.run {
+                        self.showGameLoadingWindow = false
+                    }
+                    break
+                }
+
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func stopLogMonitoring() {
+        logMonitorTask?.cancel()
+        logMonitorTask = nil
+    }
+
+    private func bringGameWindowToFront() {
+        // 尝试将游戏窗口置于前台
+        // 遍历所有窗口，找到 Java 进程的窗口
+        guard let processID = gameProcessID else { return }
+
+        let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+
+        for window in windows {
+            if let windowOwnerPID = window[kCGWindowOwnerPID as String] as? Int32,
+               windowOwnerPID == processID {
+                // 找到了游戏窗口，使用 AppleScript 激活
+                let script = """
+                tell application "System Events"
+                    set frontmost of first process whose unix id is \(processID) to true
+                end tell
+                """
+                if let appleScript = NSAppleScript(source: script) {
+                    var error: NSDictionary?
+                    appleScript.executeAndReturnError(&error)
+                }
+                break
+            }
         }
     }
 }
