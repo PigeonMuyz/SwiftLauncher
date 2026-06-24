@@ -51,39 +51,28 @@ struct SidebarView: View {
             // 底部：实例选择器（气泡样式）
             VStack(spacing: 0) {
                 if !store.instances.isEmpty {
-                    Picker("", selection: $store.selectedInstanceID.animation(.easeInOut(duration: 0.25))) {
-                        ForEach(store.instances) { inst in
-                            HStack(spacing: 10) {
-                                Image(systemName: inst.loader.systemImage)
-                                    .font(.title3)
-                                    .frame(width: 24)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(inst.name)
-                                        .font(.subheadline.weight(.medium))
-                                    Text(versionLine(for: inst))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                    VStack(spacing: 0) {
+                        Picker("", selection: $store.selectedInstanceID.animation(.easeInOut(duration: 0.25))) {
+                            ForEach(store.instances) { inst in
+                                Text("\(inst.loader.systemImage) \(inst.name) - \(versionLine(for: inst))")
+                                    .tag(Optional(inst.id))
                             }
-                            .tag(Optional(inst.id))
+
+                            Divider()
+
+                            Text("➕ 新建实例...")
+                                .tag(UUID?.none)
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .onChange(of: store.selectedInstanceID) { oldValue, newValue in
+                            if newValue == nil {
+                                store.presentNewInstance()
+                                store.selectedInstanceID = oldValue
+                            }
                         }
 
-                        Divider()
-
-                        Label("新建实例...", systemImage: "plus.circle")
-                            .tag(UUID?.none)
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .onChange(of: store.selectedInstanceID) { oldValue, newValue in
-                        if newValue == nil {
-                            store.presentNewInstance()
-                            store.selectedInstanceID = oldValue
-                        }
-                    }
-                    .overlay {
-                        // 自定义显示气泡
+                        // 显示当前实例的气泡
                         if let instance = store.selectedInstance {
                             HStack(spacing: 10) {
                                 InstanceIconView(store: store, instance: instance, size: 32)
@@ -97,15 +86,11 @@ struct SidebarView: View {
                                         .lineLimit(1)
                                 }
                                 Spacer()
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
                             .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
-                            .allowsHitTesting(false)
                         }
                     }
                     .padding(.horizontal, 10)
