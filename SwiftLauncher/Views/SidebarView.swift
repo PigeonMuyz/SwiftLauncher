@@ -73,10 +73,8 @@ struct SidebarView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(width: 200, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                     } else {
                         HStack(spacing: 10) {
                             Image(systemName: "shippingbox")
@@ -90,13 +88,13 @@ struct SidebarView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(width: 200, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                     }
                 }
                 .buttonStyle(.plain)
+                .frame(width: 220)
+                .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
 
@@ -150,65 +148,59 @@ private struct InstancePickerList: View {
     @Binding var isPresented: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                // 只显示未选中的实例
-                ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            store.selectedInstanceID = instance.id
-                        }
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            isPresented = false
-                        }
-                    } label: {
-                        HStack(spacing: 10) {
-                            InstanceIconView(store: store, instance: instance, size: 32)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(instance.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .lineLimit(1)
-                                Text(versionLine(for: instance))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
-                    }
-                    .buttonStyle(.plain)
-                }
-
+        VStack(spacing: 8) {
+            // 只显示未选中的实例
+            ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
                 Button {
-                    store.presentNewInstance()
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        store.selectedInstanceID = instance.id
+                    }
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                         isPresented = false
                     }
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.green)
-                        Text("新建实例...")
-                            .font(.subheadline.weight(.medium))
+                        InstanceIconView(store: store, instance: instance, size: 32)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(instance.name)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(1)
+                            Text(versionLine(for: instance))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                         Spacer()
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+
+            Button {
+                store.presentNewInstance()
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    isPresented = false
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.green)
+                    Text("新建实例...")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
         }
-        .frame(maxHeight: 280)
-        .frame(width: 200)  // 固定宽度，等宽设计
+        .padding(10)
+        .frame(width: 220)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
