@@ -12,8 +12,8 @@ struct SettingsView: View {
 
     private static let defaultTemplate = "${mc_version} · ${mod_loader}"
 
-    @State private var javaDeleteError: Error?
-    @State private var showingJavaDeleteError = false
+    @ViewState private var javaDeleteError: Error?
+    @ViewState private var showingJavaDeleteError = false
 
     var body: some View {
         TabView {
