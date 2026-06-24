@@ -45,6 +45,9 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("自定义实例信息显示格式")
                             .font(.subheadline.weight(.medium))
+                        Text("可用变量：${mc_version} MC版本号 · ${mod_loader} 模组加载器 · ${mod_num} 模组数量")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
                         HStack {
                             TextField("显示模板", text: $instanceDisplayTemplate)
