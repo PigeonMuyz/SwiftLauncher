@@ -169,7 +169,7 @@ final class LauncherStore {
         )
         instances.append(instance)
         selectedInstanceID = instance.id
-        selection = .instances
+        selection = .home
         isPresentingNewInstance = false
         newInstanceSuggestedVersionID = nil
         await persistInstances()
@@ -495,7 +495,7 @@ final class LauncherStore {
             )
             try? await fileSystem.ensureMinecraftIcon(for: instance.versionID)
             iconRevision += 1
-            selection = .instances
+            selection = .home
         } catch is CancellationError {
             updateDownload(taskID) { $0.state = .cancelled }
         } catch {

@@ -5,9 +5,9 @@ struct ContentView: View {
     @Bindable var store: LauncherStore
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openURL) private var openURL
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var isImportingModpack = false
-    @State private var isImportingMinecraftFolder = false
+    @ViewState private var columnVisibility: NavigationSplitViewVisibility = .all
+    @ViewState private var isImportingModpack = false
+    @ViewState private var isImportingMinecraftFolder = false
 
     var body: some View {
         rootContent
@@ -24,8 +24,8 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .tint(Color(red: 0.62, green: 0.76, blue: 0.36))
         .toolbar {
-            if store.selection == .instances {
-                ToolbarItem(placement: .primaryAction) {
+            if store.selection == .home {
+                ToolbarItemGroup(placement: .primaryAction) {
                     Menu {
                         Button {
                             store.presentNewInstance()
@@ -43,13 +43,9 @@ struct ContentView: View {
                             Label("导入 .minecraft 文件夹…", systemImage: "folder.badge.plus")
                         }
                     } label: {
-                        Label("添加", systemImage: "plus")
+                        Label("添加实例", systemImage: "plus")
                     }
-                }
-            }
 
-            if store.selection == .home {
-                ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         store.loadLog()
                         openWindow(id: "logs")
@@ -141,12 +137,18 @@ struct ContentView: View {
         switch store.selection {
         case .home:
             HomeView(store: store)
-        case .instances:
-            InstancesView(store: store)
+        case .mods:
+            ModsView(store: store)
+        case .resourcePacks:
+            ResourcePacksView(store: store)
+        case .shaders:
+            ShadersView(store: store)
         case .downloads:
             DownloadsView(store: store)
         case .accounts:
             AccountsView(store: store)
+        case .settings:
+            SettingsView(store: store)
         }
     }
 

@@ -7,7 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
+		B5E893ED80434618AFBA4780 /* ModsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModsView.swift; sourceTree = "<group>"; };
+		477D5217DA584F6C9BDCA4DD /* ResourcePacksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcePacksView.swift; sourceTree = "<group>"; };
+		0A7B990878EF46FC8949BD06 /* ShadersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadersView.swift; sourceTree = "<group>"; };
 		000000000000000000000120 /* SwiftLauncher.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwiftLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CB2A6AAF80114E4CAF9291DF /* ModsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModsView.swift; sourceTree = "<group>"; };
+		48D0D3F5E4954124B372E6A5 /* ResourcePacksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourcePacksView.swift; sourceTree = "<group>"; };
+		76D7575CE6C84B01BC8CC3C4 /* ShadersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShadersView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -22,7 +28,10 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
-			);
+				5BA4047473274CAB84F1832A /* ModsView.swift in Sources */,
+				4941BC393DC74C23B273A558 /* ResourcePacksView.swift in Sources */,
+				5A0AA273F79E49FE94451DAF /* ShadersView.swift in Sources */,
+);
 		};
 /* End PBXFrameworksBuildPhase section */
 
@@ -102,7 +111,10 @@
 		000000000000000140000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-			);
+				5BA4047473274CAB84F1832A /* ModsView.swift in Sources */,
+				4941BC393DC74C23B273A558 /* ResourcePacksView.swift in Sources */,
+				5A0AA273F79E49FE94451DAF /* ShadersView.swift in Sources */,
+);
 		};
 /* End PBXResourcesBuildPhase section */
 
@@ -110,7 +122,10 @@
 		000000000000000120000000 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
-			);
+				5BA4047473274CAB84F1832A /* ModsView.swift in Sources */,
+				4941BC393DC74C23B273A558 /* ResourcePacksView.swift in Sources */,
+				5A0AA273F79E49FE94451DAF /* ShadersView.swift in Sources */,
+);
 		};
 /* End PBXSourcesBuildPhase section */
 

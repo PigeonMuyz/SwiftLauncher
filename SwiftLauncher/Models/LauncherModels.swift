@@ -85,6 +85,14 @@ struct LauncherInstance: Codable, Identifiable, Hashable, Sendable {
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
         lastPlayedAt = try container.decodeIfPresent(Date.self, forKey: .lastPlayedAt)
     }
+
+    func hasShaderSupport(mods: [ModFile]) -> Bool {
+        let shaderModIdentifiers = ["iris", "oculus", "optifine"]
+        return mods.contains { mod in
+            let lowerFileName = mod.fileName.lowercased()
+            return shaderModIdentifiers.contains { lowerFileName.contains($0) }
+        }
+    }
 }
 
 enum ModLoader: String, Codable, CaseIterable, Identifiable, Sendable {

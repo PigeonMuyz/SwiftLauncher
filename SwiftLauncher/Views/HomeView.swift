@@ -152,7 +152,12 @@ struct HomeView: View {
                 Text("最近实例")
                     .font(.headline)
                 Spacer()
-                Button("管理全部") { store.selection = .instances }
+                Button("管理全部") {
+                    // 选择最近的实例并切换到首页
+                    if let recent = store.recentInstance {
+                        store.selectedInstanceID = recent.id
+                    }
+                }
                     .buttonStyle(.plain)
                     .foregroundStyle(mossAccent)
             }
@@ -201,9 +206,8 @@ struct HomeView: View {
 
     private func instanceMenu(_ instance: LauncherInstance) -> some View {
         Menu {
-            Button("管理实例") {
+            Button("切换到此实例") {
                 store.selectedInstanceID = instance.id
-                store.selection = .instances
             }
             Button("打开游戏目录") { store.openGameDirectory(instance) }
             if !store.isInstalled(instance) {
@@ -318,10 +322,6 @@ private struct RecentInstanceRow: View {
             Menu {
                 Button("选择实例", action: onSelect)
                 Button("打开游戏目录") { store.openGameDirectory(instance) }
-                Button("管理设置") {
-                    onSelect()
-                    store.selection = .instances
-                }
             } label: {
                 Image(systemName: "ellipsis")
                     .frame(width: 24)
