@@ -3,8 +3,6 @@ import SwiftUI
 
 struct HomeView: View {
     @Bindable var store: LauncherStore
-    @ViewState private var showingInstanceSettings = false
-    @ViewState private var settingsInstanceID: UUID?
 
     private var recentInstances: [LauncherInstance] {
         store.instances.sorted {
@@ -44,11 +42,6 @@ struct HomeView: View {
                     .controlSize(.large)
                     .padding(22)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-            }
-        }
-        .sheet(isPresented: $showingInstanceSettings) {
-            if let instanceID = settingsInstanceID {
-                InstanceSettingsView(store: store, instanceID: instanceID)
             }
         }
     }
@@ -216,10 +209,6 @@ struct HomeView: View {
             Button("切换到此实例") {
                 store.selectedInstanceID = instance.id
             }
-            Button("实例设置...") {
-                settingsInstanceID = instance.id
-                showingInstanceSettings = true
-            }
             Button("打开游戏目录") { store.openGameDirectory(instance) }
             if !store.isInstalled(instance) {
                 Button("仅安装") { Task { await store.install(instance) } }
@@ -332,10 +321,6 @@ private struct RecentInstanceRow: View {
 
             Menu {
                 Button("选择实例", action: onSelect)
-                Button("实例设置...") {
-                    store.selectedInstanceID = instance.id
-                    // 触发父视图的设置弹窗
-                }
                 Button("打开游戏目录") { store.openGameDirectory(instance) }
             } label: {
                 Image(systemName: "ellipsis")

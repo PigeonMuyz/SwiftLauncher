@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var store: LauncherStore
     @ViewState private var isShowingInstancePicker = false
+    @ViewState private var showingInstanceSettings = false
     @AppStorage("instanceDisplayTemplate") private var instanceDisplayTemplate = "${mc_version} · ${mod_loader}"
 
     var body: some View {
@@ -53,33 +54,58 @@ struct SidebarView: View {
 
             // 底部：实例选择器气泡
             VStack(spacing: 0) {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        isShowingInstancePicker.toggle()
-                    }
-                } label: {
-                    if let instance = store.selectedInstance {
-                        HStack(spacing: 10) {
-                            InstanceIconView(store: store, instance: instance, size: 32)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(instance.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .lineLimit(1)
-                                Text(versionLine(for: instance))
+                if let instance = store.selectedInstance {
+                    HStack(spacing: 0) {
+                        // 主气泡按钮
+                        Button {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                isShowingInstancePicker.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 10) {
+                                InstanceIconView(store: store, instance: instance, size: 32)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(instance.name)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
+                                    Text(versionLine(for: instance))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: isShowingInstancePicker ? "chevron.down" : "chevron.up")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(1)
                             }
-                            Spacer()
-                            Image(systemName: isShowingInstancePicker ? "chevron.down" : "chevron.up")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            .padding(.leading, 14)
+                            .padding(.trailing, 8)
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .frame(width: geometry.size.width - 20)
-                        .contentShape(Rectangle())
-                    } else {
+                        .buttonStyle(.plain)
+
+                        // 设置按钮
+                        Button {
+                            showingInstanceSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 32, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 10)
+                        .help("实例设置")
+                    }
+                    .frame(width: geometry.size.width - 20)
+                } else {
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            isShowingInstancePicker.toggle()
+                        }
+                    } label: {
                         HStack(spacing: 10) {
                             Image(systemName: "shippingbox")
                                 .font(.title3)
@@ -97,6 +123,8 @@ struct SidebarView: View {
                         .frame(width: geometry.size.width - 20)
                         .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                }
                 }
                 .buttonStyle(.plain)
                 .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
@@ -140,9 +168,13 @@ struct SidebarView: View {
                     .padding(.bottom, 10)
                 }
             }
-            }
         }
         .navigationTitle("")
+        .sheet(isPresented: $showingInstanceSettings) {
+            if let instance = store.selectedInstance {
+                InstanceSettingsView(store: store, instanceID: instance.id)
+            }
+        }
     }
 
     private func versionLine(for instance: LauncherInstance) -> String {

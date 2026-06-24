@@ -722,25 +722,37 @@ final class LauncherStore {
         return runtime.path.hasPrefix(managedRoot)
     }
 
-    func deleteJavaRuntime(_ runtime: JavaRuntime) async throws {
+    func deleteJavaRuntime(_ runtime: JavaRuntime, migrateToHigherVersion: Bool = false) async throws {
         guard isManagedJava(runtime) else {
             throw LauncherError.invalidOperation("只能删除启动器托管的 Java 运行时")
         }
 
         let usingInstances = instancesUsing(javaRuntime: runtime)
-        guard usingInstances.isEmpty else {
-            let names = usingInstances.map { $0.name }.joined(separator: "、")
+
+        if !usingInstances.isEmpty {
+            // 找到更高版本的 Java
             let higherVersions = javaRuntimes.filter { $0.majorVersion > runtime.majorVersion }
-            if let recommended = higherVersions.first {
+            guard let targetRuntime = higherVersions.first else {
+                throw LauncherError.invalidOperation("以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))\n\n没有更高版本的 Java 可供切换。")
+            }
+
+            if !migrateToHigherVersion {
+                let names = usingInstances.map { $0.name }.joined(separator: "、")
                 throw LauncherError.invalidOperation(
-                    "以下实例正在使用此 Java：\(names)\n\n建议切换到 Java \(recommended.majorVersion)（向下兼容），然后再删除。"
+                    "以下实例正在使用此 Java：\(names)\n\n确认删除后，这些实例将自动切换到 Java \(targetRuntime.majorVersion)。"
                 )
-            } else {
-                throw LauncherError.invalidOperation("以下实例正在使用此 Java：\(names)")
+            }
+
+            // 执行迁移
+            for instance in usingInstances {
+                if let index = instances.firstIndex(where: { $0.id == instance.id }) {
+                    instances[index].javaPath = targetRuntime.path
+                    instances[index].usesAutomaticJava = false
+                }
             }
         }
 
-        // 找到 runtime 目录（向上查找到 runtimesRoot 的直接子目录）
+        // 删除 Java 运行时目录
         let runtimePath = URL(fileURLWithPath: runtime.path)
         var directoryToDelete = runtimePath
         let managedRoot = fileSystem.runtimesRoot
@@ -758,6 +770,21 @@ final class LauncherStore {
 
     func instanceRoot(_ instanceID: UUID) -> URL {
         fileSystem.instanceRoot(instanceID)
+    }
+
+    func installJavaRuntime(
+        majorVersion: Int,
+        progress: @escaping @MainActor (Double, String) -> Void
+    ) async throws -> JavaRuntime {
+        let runtime = try await javaService.ensureRuntime(
+            majorVersion: majorVersion,
+            customPath: nil,
+            allowsDownload: true,
+            progress: progress
+        )
+        // 刷新 Java 列表
+        javaRuntimes = await javaService.discover()
+        return runtime
     }
 
     func instanceIconImage(for instance: LauncherInstance) -> NSImage? {

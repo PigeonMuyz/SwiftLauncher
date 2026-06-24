@@ -14,6 +14,15 @@ struct SettingsView: View {
 
     @ViewState private var javaDeleteError: Error?
     @ViewState private var showingJavaDeleteError = false
+    @ViewState private var javaToDelete: JavaRuntime?
+    @ViewState private var showingJavaDeleteConfirm = false
+    @ViewState private var showingAddJava = false
+    @ViewState private var selectedJavaMajorVersion = 21
+    @ViewState private var isInstallingJava = false
+    @ViewState private var javaInstallProgress: Double = 0
+    @ViewState private var javaInstallMessage = ""
+
+    private let availableJavaVersions = [25, 21, 17, 11, 8]
 
     var body: some View {
         TabView {
@@ -141,10 +150,13 @@ struct SettingsView: View {
                                     Button(role: .destructive) {
                                         Task {
                                             do {
-                                                try await store.deleteJavaRuntime(runtime)
+                                                // 第一次尝试删除，如果有使用会抛出错误
+                                                try await store.deleteJavaRuntime(runtime, migrateToHigherVersion: false)
                                             } catch {
+                                                // 显示确认对话框
+                                                javaToDelete = runtime
                                                 javaDeleteError = error
-                                                showingJavaDeleteError = true
+                                                showingJavaDeleteConfirm = true
                                             }
                                         }
                                     } label: {
@@ -157,7 +169,13 @@ struct SettingsView: View {
                             .padding(.vertical, 4)
                         }
                     }
-                    Button("重新扫描") { Task { await store.refreshEnvironment() } }
+                    HStack {
+                        Button("重新扫描") { Task { await store.refreshEnvironment() } }
+                        Spacer()
+                        Button("添加 Java...") {
+                            showingAddJava = true
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -168,6 +186,68 @@ struct SettingsView: View {
             Button("确定", role: .cancel) {}
         } message: { error in
             Text(error.localizedDescription)
+        }
+        .alert("确认删除", isPresented: $showingJavaDeleteConfirm, presenting: javaDeleteError) { error in
+            Button("取消", role: .cancel) {}
+            Button("确认删除并迁移", role: .destructive) {
+                guard let runtime = javaToDelete else { return }
+                Task {
+                    do {
+                        try await store.deleteJavaRuntime(runtime, migrateToHigherVersion: true)
+                    } catch {
+                        javaDeleteError = error
+                        showingJavaDeleteError = true
+                    }
+                }
+            }
+        } message: { error in
+            Text(error.localizedDescription)
+        }
+        .sheet(isPresented: $showingAddJava) {
+            NavigationStack {
+                Form {
+                    Section {
+                        Picker("Java 版本", selection: $selectedJavaMajorVersion) {
+                            ForEach(availableJavaVersions, id: \.self) { version in
+                                Text("Java \(version)").tag(version)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("将从 Adoptium 下载并安装 Eclipse Temurin JRE。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if isInstallingJava {
+                        Section {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ProgressView(value: javaInstallProgress, total: 1.0) {
+                                    Text(javaInstallMessage)
+                                        .font(.caption)
+                                }
+                            }
+                        }
+                    }
+                }
+                .formStyle(.grouped)
+                .navigationTitle("添加 Java")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") {
+                            showingAddJava = false
+                        }
+                        .disabled(isInstallingJava)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("下载并安装") {
+                            installJava(version: selectedJavaMajorVersion)
+                        }
+                        .disabled(isInstallingJava)
+                    }
+                }
+            }
+            .frame(width: 450, height: 220)
         }
     }
 
@@ -184,5 +264,28 @@ struct SettingsView: View {
             .replacingOccurrences(of: "${mc_version}", with: "1.20.1")
             .replacingOccurrences(of: "${mod_loader}", with: "Fabric")
             .replacingOccurrences(of: "${mod_num}", with: "42")
+    }
+
+    private func installJava(version: Int) {
+        isInstallingJava = true
+        javaInstallProgress = 0
+        javaInstallMessage = "准备下载 Java \(version)..."
+
+        Task {
+            do {
+                _ = try await store.installJavaRuntime(
+                    majorVersion: version
+                ) { progress, message in
+                    javaInstallProgress = progress
+                    javaInstallMessage = message
+                }
+                isInstallingJava = false
+                showingAddJava = false
+            } catch {
+                isInstallingJava = false
+                javaDeleteError = error
+                showingJavaDeleteError = true
+            }
+        }
     }
 }
