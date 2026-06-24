@@ -52,16 +52,33 @@ struct SidebarView: View {
             VStack(spacing: 0) {
                 if let instance = store.selectedInstance {
                     Menu {
+                        // 显示所有实例，带图标和详细信息
                         ForEach(store.instances) { inst in
                             Button {
-                                store.selectedInstanceID = inst.id
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    store.selectedInstanceID = inst.id
+                                }
                             } label: {
-                                HStack {
+                                HStack(spacing: 10) {
+                                    // 实例图标（在 Menu 中显示）
                                     Image(systemName: inst.loader.systemImage)
-                                    VStack(alignment: .leading) {
+                                        .font(.title3)
+                                        .frame(width: 24)
+
+                                    VStack(alignment: .leading, spacing: 2) {
                                         Text(inst.name)
+                                            .font(.subheadline.weight(.medium))
                                         Text(versionLine(for: inst))
                                             .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    // 当前选中标记
+                                    if inst.id == instance.id {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
                                     }
                                 }
                             }
@@ -101,6 +118,7 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
+                    .animation(.easeInOut(duration: 0.25), value: instance.id)
                 } else {
                     Button {
                         store.presentNewInstance()
