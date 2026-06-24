@@ -19,6 +19,7 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
         } detail: {
             detailContainer
+                .navigationSplitViewColumnWidth(min: 600, ideal: 800)
         }
         .navigationSplitViewStyle(.balanced)
         .preferredColorScheme(.dark)
