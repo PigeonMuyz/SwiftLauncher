@@ -65,7 +65,7 @@ struct DownloadsView: View {
     }
 
     private var gameDownloads: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             VStack(spacing: 0) {
                 VStack(spacing: 10) {
                     Picker("版本类型", selection: $versionType) {
@@ -93,7 +93,9 @@ struct DownloadsView: View {
                     }
                 }
             }
-            .frame(minWidth: 360, idealWidth: 430)
+            .frame(width: 360)
+
+            Divider()
 
             if let version = selectedGameVersion {
                 VStack(alignment: .leading, spacing: 22) {
@@ -121,10 +123,10 @@ struct DownloadsView: View {
                     Spacer()
                 }
                 .padding(36)
-                .frame(minWidth: 420, maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 ContentUnavailableView("选择一个游戏版本", systemImage: "shippingbox")
-                    .frame(minWidth: 420)
+                    .frame(maxWidth: .infinity)
             }
         }
     }

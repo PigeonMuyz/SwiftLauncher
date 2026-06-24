@@ -197,7 +197,6 @@ final class LauncherStore {
             DownloadTaskInfo(id: taskID, title: url.deletingPathExtension().lastPathComponent, detail: "准备导入整合包"),
             at: 0
         )
-        selection = .downloads
         do {
             updateDownload(taskID) { $0.state = .downloading }
             let result = try await instanceImportService.importModpack(
@@ -245,7 +244,6 @@ final class LauncherStore {
             DownloadTaskInfo(id: taskID, title: url.lastPathComponent, detail: "准备导入 .minecraft"),
             at: 0
         )
-        selection = .downloads
         do {
             updateDownload(taskID) { $0.state = .downloading }
             let result = try await instanceImportService.importMinecraftFolder(
@@ -474,7 +472,6 @@ final class LauncherStore {
             DownloadTaskInfo(id: taskID, title: instance.name, detail: "准备安装 \(instance.versionID)"),
             at: 0
         )
-        selection = .downloads
 
         do {
             updateDownload(taskID) { task in task.state = .downloading }
