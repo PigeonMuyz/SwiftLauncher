@@ -75,6 +75,8 @@ struct SidebarView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
+                        .frame(width: 220)
+                        .contentShape(Rectangle())
                     } else {
                         HStack(spacing: 10) {
                             Image(systemName: "shippingbox")
@@ -90,10 +92,11 @@ struct SidebarView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
+                        .frame(width: 220)
+                        .contentShape(Rectangle())
                     }
                 }
                 .buttonStyle(.plain)
-                .frame(width: 220)
                 .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
