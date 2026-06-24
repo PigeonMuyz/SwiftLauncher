@@ -148,60 +148,62 @@ private struct InstancePickerList: View {
     @Binding var isPresented: Bool
 
     var body: some View {
-        VStack(spacing: 8) {
-            // 只显示未选中的实例
-            ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        store.selectedInstanceID = instance.id
+        ScrollView {
+            VStack(spacing: 8) {
+                // 只显示未选中的实例
+                ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            store.selectedInstanceID = instance.id
+                        }
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            isPresented = false
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            InstanceIconView(store: store, instance: instance, size: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(instance.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+                                Text(versionLine(for: instance))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .frame(width: 220)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                     }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    store.presentNewInstance()
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                         isPresented = false
                     }
                 } label: {
                     HStack(spacing: 10) {
-                        InstanceIconView(store: store, instance: instance, size: 32)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(instance.name)
-                                .font(.subheadline.weight(.medium))
-                                .lineLimit(1)
-                            Text(versionLine(for: instance))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.green)
+                        Text("新建实例...")
+                            .font(.subheadline.weight(.medium))
                         Spacer()
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(width: 220)
+                    .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
             }
-
-            Button {
-                store.presentNewInstance()
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    isPresented = false
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.green)
-                    Text("新建实例...")
-                        .font(.subheadline.weight(.medium))
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
-            }
-            .buttonStyle(.plain)
         }
-        .padding(10)
-        .frame(width: 220)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxHeight: 400)
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
     }
