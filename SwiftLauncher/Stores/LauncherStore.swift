@@ -708,6 +708,47 @@ final class LauncherStore {
         }
     }
 
+    func instancesUsing(javaRuntime: JavaRuntime) -> [LauncherInstance] {
+        return instances.filter { instance in
+            if let runtime = preferredRuntime(for: instance) {
+                return runtime.path == javaRuntime.path
+            }
+            return false
+        }
+    }
+
+    func isManagedJava(_ runtime: JavaRuntime) -> Bool {
+        let managedRoot = fileSystem.runtimesRoot.path
+        return runtime.path.hasPrefix(managedRoot)
+    }
+
+    func deleteJavaRuntime(_ runtime: JavaRuntime) async throws {
+        guard isManagedJava(runtime) else {
+            throw LauncherError.invalidOperation("只能删除启动器托管的 Java 运行时")
+        }
+
+        let usingInstances = instancesUsing(javaRuntime: runtime)
+        guard usingInstances.isEmpty else {
+            let names = usingInstances.map { $0.name }.joined(separator: "、")
+            throw LauncherError.invalidOperation("以下实例正在使用此 Java：\(names)")
+        }
+
+        // 找到 runtime 目录（向上查找到 runtimesRoot 的直接子目录）
+        let runtimePath = URL(fileURLWithPath: runtime.path)
+        var directoryToDelete = runtimePath
+        let managedRoot = fileSystem.runtimesRoot
+
+        while directoryToDelete.deletingLastPathComponent() != managedRoot {
+            directoryToDelete = directoryToDelete.deletingLastPathComponent()
+            if directoryToDelete == managedRoot {
+                throw LauncherError.invalidOperation("无法确定 Java 运行时的安装目录")
+            }
+        }
+
+        try FileManager.default.removeItem(at: directoryToDelete)
+        javaRuntimes.removeAll { $0.path == runtime.path }
+    }
+
     func instanceIconImage(for instance: LauncherInstance) -> NSImage? {
         _ = iconRevision
         if instance.iconFileName != nil,

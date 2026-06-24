@@ -12,6 +12,9 @@ struct SettingsView: View {
 
     private static let defaultTemplate = "${mc_version} · ${mod_loader}"
 
+    @State private var javaDeleteError: Error?
+    @State private var showingJavaDeleteError = false
+
     var body: some View {
         TabView {
             Form {
@@ -92,13 +95,66 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(store.javaRuntimes) { runtime in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(runtime.displayName)
-                                Text("\(runtime.vendor) · \(runtime.path)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 8) {
+                                        Text(runtime.displayName)
+                                            .font(.headline)
+
+                                        let usingInstances = store.instancesUsing(javaRuntime: runtime)
+                                        if !usingInstances.isEmpty {
+                                            Text("正在使用: \(usingInstances.count)个实例")
+                                                .font(.caption)
+                                                .foregroundStyle(.green)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(.green.opacity(0.15), in: Capsule())
+                                        }
+
+                                        if runtime == store.javaRuntimes.first {
+                                            Text("推荐")
+                                                .font(.caption.weight(.medium))
+                                                .foregroundStyle(.blue)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(.blue.opacity(0.15), in: Capsule())
+                                        }
+
+                                        if !store.isManagedJava(runtime) {
+                                            Text("系统安装")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(.secondary.opacity(0.1), in: Capsule())
+                                        }
+                                    }
+
+                                    Text("\(runtime.vendor) · \(runtime.path)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                if store.isManagedJava(runtime) {
+                                    Button(role: .destructive) {
+                                        Task {
+                                            do {
+                                                try await store.deleteJavaRuntime(runtime)
+                                            } catch {
+                                                javaDeleteError = error
+                                                showingJavaDeleteError = true
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help("删除此 Java 运行时")
+                                }
                             }
+                            .padding(.vertical, 4)
                         }
                     }
                     Button("重新扫描") { Task { await store.refreshEnvironment() } }
@@ -108,6 +164,11 @@ struct SettingsView: View {
             .tabItem { Label("Java", systemImage: "cup.and.heat.waves") }
         }
         .frame(width: 660, height: 480)
+        .alert("删除失败", isPresented: $showingJavaDeleteError, presenting: javaDeleteError) { _ in
+            Button("确定", role: .cancel) {}
+        } message: { error in
+            Text(error.localizedDescription)
+        }
     }
 
     private var selectedDownloadSource: DownloadSource {
