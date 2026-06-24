@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Bindable var store: LauncherStore
+    @ViewState private var isShowingInstancePicker = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,57 +49,35 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
 
-            // 底部：实例选择器（气泡样式）
+            // 底部：实例选择器气泡
             VStack(spacing: 0) {
-                if !store.instances.isEmpty {
-                    VStack(spacing: 0) {
-                        Picker("", selection: $store.selectedInstanceID.animation(.easeInOut(duration: 0.25))) {
-                            ForEach(store.instances) { inst in
-                                Text("\(inst.loader.systemImage) \(inst.name) - \(versionLine(for: inst))")
-                                    .tag(Optional(inst.id))
-                            }
-
-                            Divider()
-
-                            Text("➕ 新建实例...")
-                                .tag(UUID?.none)
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .onChange(of: store.selectedInstanceID) { oldValue, newValue in
-                            if newValue == nil {
-                                store.presentNewInstance()
-                                store.selectedInstanceID = oldValue
-                            }
-                        }
-
-                        // 显示当前实例的气泡
-                        if let instance = store.selectedInstance {
-                            HStack(spacing: 10) {
-                                InstanceIconView(store: store, instance: instance, size: 32)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(instance.name)
-                                        .font(.subheadline.weight(.medium))
-                                        .lineLimit(1)
-                                    Text(versionLine(for: instance))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
-                        }
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isShowingInstancePicker.toggle()
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 10)
-                } else {
-                    Button {
-                        store.presentNewInstance()
-                    } label: {
+                } label: {
+                    if let instance = store.selectedInstance {
+                        HStack(spacing: 10) {
+                            InstanceIconView(store: store, instance: instance, size: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(instance.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+                                Text(versionLine(for: instance))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Image(systemName: isShowingInstancePicker ? "chevron.down" : "chevron.up")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
+                    } else {
                         HStack(spacing: 10) {
                             Image(systemName: "shippingbox")
                                 .font(.title3)
@@ -107,15 +86,27 @@ struct SidebarView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                             Spacer()
+                            Image(systemName: "chevron.up")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
                         .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                     }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+
+                // 实例选择器展开列表
+                if isShowingInstancePicker {
+                    InstancePickerList(
+                        store: store,
+                        isPresented: $isShowingInstancePicker
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 // 下载任务指示器（可选）
@@ -146,6 +137,86 @@ struct SidebarView: View {
             }
         }
         .navigationTitle("")
+    }
+
+    private func versionLine(for instance: LauncherInstance) -> String {
+        let loader = instance.loader == .vanilla ? "原版" : instance.loader.title
+        return "MC \(instance.versionID) · \(loader)"
+    }
+}
+
+private struct InstancePickerList: View {
+    let store: LauncherStore
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                ForEach(store.instances) { instance in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            store.selectedInstanceID = instance.id
+                        }
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            isPresented = false
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            InstanceIconView(store: store, instance: instance, size: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(instance.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+                                Text(versionLine(for: instance))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            if instance.id == store.selectedInstanceID {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Divider()
+                    .padding(.vertical, 4)
+
+                Button {
+                    store.presentNewInstance()
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isPresented = false
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.green)
+                        Text("新建实例...")
+                            .font(.subheadline.weight(.medium))
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+        .frame(maxHeight: 280)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
     }
 
     private func versionLine(for instance: LauncherInstance) -> String {
