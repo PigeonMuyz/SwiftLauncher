@@ -16,6 +16,8 @@ struct SettingsView: View {
     @ViewState private var showingJavaDeleteError = false
     @ViewState private var javaToDelete: JavaRuntime?
     @ViewState private var showingJavaDeleteConfirm = false
+    @ViewState private var selectedTargetJava: JavaRuntime?
+    @ViewState private var availableTargetJavas: [JavaRuntime] = []
     @ViewState private var showingAddJava = false
     @ViewState private var selectedJavaMajorVersion = 21
     @ViewState private var isInstallingJava = false
@@ -149,14 +151,29 @@ struct SettingsView: View {
                                 if store.isManagedJava(runtime) {
                                     Button(role: .destructive) {
                                         Task {
-                                            do {
-                                                // 第一次尝试删除，如果有使用会抛出错误
-                                                try await store.deleteJavaRuntime(runtime, migrateToHigherVersion: false)
-                                            } catch {
-                                                // 显示确认对话框
-                                                javaToDelete = runtime
-                                                javaDeleteError = error
-                                                showingJavaDeleteConfirm = true
+                                            let usingInstances = store.instancesUsing(javaRuntime: runtime)
+                                            if usingInstances.isEmpty {
+                                                // 没有实例使用，直接删除
+                                                do {
+                                                    try await store.deleteJavaRuntime(runtime)
+                                                } catch {
+                                                    javaDeleteError = error
+                                                    showingJavaDeleteError = true
+                                                }
+                                            } else {
+                                                // 有实例使用，准备选择目标 Java
+                                                let higherVersions = store.javaRuntimes.filter { $0.majorVersion > runtime.majorVersion }
+                                                if higherVersions.isEmpty {
+                                                    javaDeleteError = LauncherError.invalidOperation(
+                                                        "以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))\n\n没有更高版本的 Java 可供切换。"
+                                                    )
+                                                    showingJavaDeleteError = true
+                                                } else {
+                                                    javaToDelete = runtime
+                                                    availableTargetJavas = higherVersions
+                                                    selectedTargetJava = higherVersions.first
+                                                    showingJavaDeleteConfirm = true
+                                                }
                                             }
                                         }
                                     } label: {
@@ -187,21 +204,39 @@ struct SettingsView: View {
         } message: { error in
             Text(error.localizedDescription)
         }
-        .alert("确认删除", isPresented: $showingJavaDeleteConfirm, presenting: javaDeleteError) { error in
+        .alert("确认删除", isPresented: $showingJavaDeleteConfirm) {
             Button("取消", role: .cancel) {}
             Button("确认删除并迁移", role: .destructive) {
-                guard let runtime = javaToDelete else { return }
+                guard let runtime = javaToDelete, let target = selectedTargetJava else { return }
                 Task {
                     do {
-                        try await store.deleteJavaRuntime(runtime, migrateToHigherVersion: true)
+                        try await store.deleteJavaRuntime(runtime, migrateTo: target)
                     } catch {
                         javaDeleteError = error
                         showingJavaDeleteError = true
                     }
                 }
             }
-        } message: { error in
-            Text(error.localizedDescription)
+        } message: {
+            if let runtime = javaToDelete {
+                let usingInstances = store.instancesUsing(javaRuntime: runtime)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))")
+
+                    if !availableTargetJavas.isEmpty {
+                        Text("请选择要迁移到的 Java 版本：")
+                            .font(.headline)
+                            .padding(.top, 4)
+
+                        Picker("目标 Java", selection: $selectedTargetJava) {
+                            ForEach(availableTargetJavas) { java in
+                                Text("Java \(java.majorVersion) · \(java.vendor)").tag(java as JavaRuntime?)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showingAddJava) {
             NavigationStack {

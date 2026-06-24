@@ -722,7 +722,7 @@ final class LauncherStore {
         return runtime.path.hasPrefix(managedRoot)
     }
 
-    func deleteJavaRuntime(_ runtime: JavaRuntime, migrateToHigherVersion: Bool = false) async throws {
+    func deleteJavaRuntime(_ runtime: JavaRuntime, migrateTo targetRuntime: JavaRuntime? = nil) async throws {
         guard isManagedJava(runtime) else {
             throw LauncherError.invalidOperation("只能删除启动器托管的 Java 运行时")
         }
@@ -730,23 +730,22 @@ final class LauncherStore {
         let usingInstances = instancesUsing(javaRuntime: runtime)
 
         if !usingInstances.isEmpty {
-            // 找到更高版本的 Java
-            let higherVersions = javaRuntimes.filter { $0.majorVersion > runtime.majorVersion }
-            guard let targetRuntime = higherVersions.first else {
-                throw LauncherError.invalidOperation("以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))\n\n没有更高版本的 Java 可供切换。")
-            }
-
-            if !migrateToHigherVersion {
-                let names = usingInstances.map { $0.name }.joined(separator: "、")
+            guard let target = targetRuntime else {
+                let higherVersions = javaRuntimes.filter { $0.majorVersion > runtime.majorVersion }
+                guard !higherVersions.isEmpty else {
+                    throw LauncherError.invalidOperation(
+                        "以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))\n\n没有更高版本的 Java 可供切换。"
+                    )
+                }
                 throw LauncherError.invalidOperation(
-                    "以下实例正在使用此 Java：\(names)\n\n确认删除后，这些实例将自动切换到 Java \(targetRuntime.majorVersion)。"
+                    "以下实例正在使用此 Java：\(usingInstances.map { $0.name }.joined(separator: "、"))"
                 )
             }
 
-            // 执行迁移
+            // 执行迁移到指定的目标 Java
             for instance in usingInstances {
                 if let index = instances.firstIndex(where: { $0.id == instance.id }) {
-                    instances[index].javaPath = targetRuntime.path
+                    instances[index].javaPath = target.path
                     instances[index].usesAutomaticJava = false
                 }
             }
