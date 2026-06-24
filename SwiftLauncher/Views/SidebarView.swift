@@ -5,9 +5,10 @@ struct SidebarView: View {
     @ViewState private var isShowingInstancePicker = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            // 上半部分：固定导航 + 动态资源管理
-            List(selection: $store.selection) {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // 上半部分：固定导航 + 动态资源管理
+                List(selection: $store.selection) {
                 Label(AppSection.home.title, systemImage: AppSection.home.systemImage)
                     .tag(AppSection.home)
                 Label(AppSection.downloads.title, systemImage: AppSection.downloads.systemImage)
@@ -75,7 +76,7 @@ struct SidebarView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .frame(width: 220)
+                        .frame(width: geometry.size.width - 20)
                         .contentShape(Rectangle())
                     } else {
                         HStack(spacing: 10) {
@@ -92,7 +93,7 @@ struct SidebarView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .frame(width: 220)
+                        .frame(width: geometry.size.width - 20)
                         .contentShape(Rectangle())
                     }
                 }
@@ -105,7 +106,8 @@ struct SidebarView: View {
                 if isShowingInstancePicker {
                     InstancePickerList(
                         store: store,
-                        isPresented: $isShowingInstancePicker
+                        isPresented: $isShowingInstancePicker,
+                        width: geometry.size.width - 20
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -136,6 +138,7 @@ struct SidebarView: View {
                     .padding(.bottom, 10)
                 }
             }
+            }
         }
         .navigationTitle("")
     }
@@ -149,6 +152,7 @@ struct SidebarView: View {
 private struct InstancePickerList: View {
     let store: LauncherStore
     @Binding var isPresented: Bool
+    let width: CGFloat
 
     var body: some View {
         ScrollView {
@@ -178,7 +182,7 @@ private struct InstancePickerList: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .frame(width: 220)
+                        .frame(width: width)
                         .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                     }
                     .buttonStyle(.plain)
@@ -200,7 +204,7 @@ private struct InstancePickerList: View {
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
-                    .frame(width: 220)
+                    .frame(width: width)
                     .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
