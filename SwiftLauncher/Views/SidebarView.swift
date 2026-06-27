@@ -1,4 +1,6 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import AppKit
 
 struct SidebarView: View {
     @Bindable var store: LauncherStore
@@ -195,29 +197,96 @@ private struct InstancePickerList: View {
     let displayTemplate: String
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                // 只显示未选中的实例
-                ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            store.selectedInstanceID = instance.id
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 8) {
+                    // 只显示未选中的实例
+                    ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                store.selectedInstanceID = instance.id
+                            }
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                isPresented = false
+                            }
+                        } label: {
+                            HStack(spacing: 10) {
+                                InstanceIconView(store: store, instance: instance, size: 32)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(instance.name)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
+                                    Text(versionLine(for: instance))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .frame(width: width)
+                            .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
                         }
+                        .buttonStyle(.plain)
+                    }
+
+                    Button {
+                        store.presentNewInstance()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             isPresented = false
                         }
                     } label: {
                         HStack(spacing: 10) {
-                            InstanceIconView(store: store, instance: instance, size: 32)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(instance.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .lineLimit(1)
-                                Text(versionLine(for: instance))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(.green)
+                            Text("新建实例...")
+                                .font(.subheadline.weight(.medium))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .frame(width: width)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        print("导入整合包按钮被点击")
+                        openModpackImporter(store: store)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            isPresented = false
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "archivebox")
+                                .font(.title3)
+                                .foregroundStyle(.blue)
+                            Text("导入整合包...")
+                                .font(.subheadline.weight(.medium))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .frame(width: width)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        print("导入 .minecraft 按钮被点击")
+                        openMinecraftFolderImporter(store: store)
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            isPresented = false
+                        }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.title3)
+                                .foregroundStyle(.orange)
+                            Text("导入 .minecraft...")
+                                .font(.subheadline.weight(.medium))
                             Spacer()
                         }
                         .padding(.horizontal, 14)
@@ -227,32 +296,38 @@ private struct InstancePickerList: View {
                     }
                     .buttonStyle(.plain)
                 }
-
-                Button {
-                    store.presentNewInstance()
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        isPresented = false
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.green)
-                        Text("新建实例...")
-                            .font(.subheadline.weight(.medium))
-                        Spacer()
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(width: width)
-                    .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
             }
+            .frame(maxHeight: 400)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
         }
-        .frame(maxHeight: 400)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
+    }
+
+    private func openModpackImporter(store: LauncherStore) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [UTType(filenameExtension: "mrpack") ?? .zip, .zip]
+        panel.message = "选择 Modrinth 整合包文件 (.mrpack 或 .zip)"
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { await store.importModpack(from: url) }
+        }
+    }
+
+    private func openMinecraftFolderImporter(store: LauncherStore) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.message = "选择 .minecraft 文件夹"
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { await store.importMinecraftFolder(from: url) }
+        }
     }
 
     private func versionLine(for instance: LauncherInstance) -> String {

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -26,6 +27,7 @@ final class LauncherStore {
     var lastRefresh: Date?
     var isRefreshing = false
     var isBusy = false
+    var busyInstances: Set<UUID> = []  // 正在操作的实例ID集合
     var isPresentingNewInstance = false
     var newInstanceSuggestedVersionID: String?
     var isPresentingLocalAccount = false
@@ -39,9 +41,8 @@ final class LauncherStore {
     var shouldOpenGameLog = false
     var iconRevision = 0
     var logText = "还没有游戏日志。"
-    var showGameLoadingWindow = false
     var gameLoadProgress: GameLogParser.GameLoadProgress = .init()
-    var gameLogEntries: [GameLogParser.LogEntry] = []
+    var showGameLoadingOverlay = false
 
     @ObservationIgnored private let fileSystem = LauncherFileSystem.shared
     @ObservationIgnored private var logMonitorTask: Task<Void, Never>?
@@ -235,7 +236,10 @@ final class LauncherStore {
         }
         isBusy = false
         if let importedInstance {
-            await install(importedInstance)
+            // 在后台异步安装，不阻塞用户操作其他实例
+            Task {
+                await install(importedInstance)
+            }
         }
     }
 
@@ -282,7 +286,10 @@ final class LauncherStore {
         }
         isBusy = false
         if let importedInstance {
-            await install(importedInstance)
+            // 在后台异步安装，不阻塞用户操作其他实例
+            Task {
+                await install(importedInstance)
+            }
         }
     }
 
@@ -326,8 +333,10 @@ final class LauncherStore {
         for instance: LauncherInstance,
         specificVersionID: String? = nil
     ) async {
-        guard !isBusy else { return }
-        isBusy = true
+        guard !busyInstances.contains(instance.id) else { return }
+        busyInstances.insert(instance.id)
+        defer { busyInstances.remove(instance.id) }
+
         let mode = LauncherExperienceMode(
             rawValue: UserDefaults.standard.string(forKey: LauncherExperienceMode.defaultsKey) ?? ""
         ) ?? .beginner
@@ -370,7 +379,6 @@ final class LauncherStore {
             }
             present(error)
         }
-        isBusy = false
     }
 
     func loadLoaderVersions(gameVersion: String, loader: ModLoader) async {
@@ -468,9 +476,14 @@ final class LauncherStore {
     }
 
     func install(_ instance: LauncherInstance) async {
-        guard !isBusy,
-              let version = manifest?.versions.first(where: { $0.id == instance.versionID }) else { return }
-        isBusy = true
+        guard let version = manifest?.versions.first(where: { $0.id == instance.versionID }) else { return }
+
+        // 只检查当前实例是否忙碌
+        guard !busyInstances.contains(instance.id) else { return }
+
+        busyInstances.insert(instance.id)
+        defer { busyInstances.remove(instance.id) }
+
         let taskID = UUID()
         downloads.insert(
             DownloadTaskInfo(id: taskID, title: instance.name, detail: "准备安装 \(instance.versionID)"),
@@ -506,11 +519,14 @@ final class LauncherStore {
             }
             present(error)
         }
-        isBusy = false
     }
 
     func launchSelectedInstance() async {
-        guard !isBusy, let instance = selectedInstance else { return }
+        guard let instance = selectedInstance else { return }
+
+        // 只检查当前实例是否忙碌，而不是全局 isBusy
+        guard !busyInstances.contains(instance.id) else { return }
+
         guard var account = account(for: instance) else {
             selection = .accounts
             present(LauncherError.missingAccount)
@@ -530,27 +546,30 @@ final class LauncherStore {
         }
 
         let version = manifest?.versions.first { $0.id == instance.versionID }
+
+        // 先检查 Java 是否可用，避免因缺失 Java 触发不必要的重新安装
+        guard let java = preferredRuntime(for: instance) else {
+            present(LauncherError.missingJava)
+            return
+        }
+
         if let version,
            !(await installer.installationIsComplete(instance: instance, version: version)) {
             await install(instance)
             guard await installer.installationIsComplete(instance: instance, version: version) else { return }
         }
 
-        guard let java = preferredRuntime(for: instance) else {
-            present(LauncherError.missingJava)
-            return
-        }
+        busyInstances.insert(instance.id)
+        defer { busyInstances.remove(instance.id) }
 
-        isBusy = true
-        defer { isBusy = false }
         do {
             let result = try await launcher.launch(instance: instance, account: account, java: java)
             gameProcessID = result.processIdentifier
             runningInstanceID = instance.id
             let launchedProcessID = result.processIdentifier
 
-            // 显示加载窗口并开始监控日志
-            showGameLoadingWindow = true
+            // 打开加载窗口并开始监控日志
+            openGameLoadingWindow()
             startLogMonitoring()
 
             Task { [weak self] in
@@ -562,6 +581,7 @@ final class LauncherStore {
                     runningInstanceID = nil
                     loadLog()
                     stopLogMonitoring()
+                    closeGameLoadingWindow()
                 }
                 if !wasStoppedByUser, !termination.succeeded {
                     presentGameCrash(termination)
@@ -898,7 +918,15 @@ final class LauncherStore {
         if let data = try? Data(contentsOf: fileSystem.versionJSON(versionID)),
            let metadata = try? JSONCoding.makeDecoder().decode(VersionMetadata.self, from: data),
            let requirement = metadata.javaVersion {
-            return javaRuntimes.first(where: { $0.majorVersion == requirement.majorVersion })
+            // 优先选择完全匹配的版本
+            if let exactMatch = javaRuntimes.first(where: { $0.majorVersion == requirement.majorVersion }) {
+                return exactMatch
+            }
+            // 如果没有完全匹配，选择大于等于要求版本的最低 Java 版本
+            // 按版本从低到高排序，找第一个满足条件的
+            return javaRuntimes
+                .filter { $0.majorVersion >= requirement.majorVersion }
+                .min(by: { $0.majorVersion < $1.majorVersion })
         }
         return javaRuntimes.first
     }
@@ -978,6 +1006,14 @@ final class LauncherStore {
 
     // MARK: - Game Log Monitoring
 
+    private func openGameLoadingWindow() {
+        showGameLoadingOverlay = true
+    }
+
+    private func closeGameLoadingWindow() {
+        showGameLoadingOverlay = false
+    }
+
     private func startLogMonitoring() {
         stopLogMonitoring() // 确保之前的任务已停止
 
@@ -1001,7 +1037,6 @@ final class LauncherStore {
 
                 if newCount > 0 {
                     await MainActor.run {
-                        self.gameLogEntries = entries
                         self.gameLoadProgress = GameLogParser.analyzeLoadProgress(entries)
 
                         // 检测游戏是否已准备好
@@ -1010,10 +1045,24 @@ final class LauncherStore {
                             Task {
                                 try? await Task.sleep(for: .seconds(2))
                                 await MainActor.run {
-                                    self.showGameLoadingWindow = false
+                                    self.closeGameLoadingWindow()
                                     self.stopLogMonitoring()
                                     // 将游戏窗口置前
                                     self.bringGameWindowToFront()
+                                }
+                            }
+                        }
+
+                        // 检测致命错误
+                        if self.gameLoadProgress.hasFatalError {
+                            // 延迟关闭加载窗口，让用户看到错误状态
+                            Task {
+                                try? await Task.sleep(for: .seconds(3))
+                                await MainActor.run {
+                                    self.closeGameLoadingWindow()
+                                    self.stopLogMonitoring()
+                                    // 自动打开日志窗口
+                                    self.shouldOpenGameLog = true
                                 }
                             }
                         }
@@ -1025,7 +1074,7 @@ final class LauncherStore {
                 // 30秒后如果还没准备好，自动关闭加载窗口
                 if checkCount > 60 { // 60 * 0.5s = 30s
                     await MainActor.run {
-                        self.showGameLoadingWindow = false
+                        self.closeGameLoadingWindow()
                     }
                     break
                 }
@@ -1042,25 +1091,29 @@ final class LauncherStore {
 
     private func bringGameWindowToFront() {
         // 尝试将游戏窗口置于前台
-        // 遍历所有窗口，找到 Java 进程的窗口
         guard let processID = gameProcessID else { return }
 
-        let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        // 使用 AppleScript 激活进程，这会自动将窗口置前
+        let script = """
+        tell application "System Events"
+            try
+                set frontmost of first process whose unix id is \(processID) to true
+            end try
+        end tell
+        """
 
-        for window in windows {
-            if let windowOwnerPID = window[kCGWindowOwnerPID as String] as? Int32,
-               windowOwnerPID == processID {
-                // 找到了游戏窗口，使用 AppleScript 激活
-                let script = """
-                tell application "System Events"
-                    set frontmost of first process whose unix id is \(processID) to true
-                end tell
-                """
-                if let appleScript = NSAppleScript(source: script) {
-                    var error: NSDictionary?
-                    appleScript.executeAndReturnError(&error)
-                }
-                break
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                print("激活游戏窗口失败: \(error)")
+            }
+        }
+
+        // 备用方法：通过 NSRunningApplication 激活
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if let app = NSRunningApplication(processIdentifier: processID) {
+                app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
             }
         }
     }

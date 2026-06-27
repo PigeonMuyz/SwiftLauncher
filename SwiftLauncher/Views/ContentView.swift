@@ -1,13 +1,10 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Bindable var store: LauncherStore
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openURL) private var openURL
     @ViewState private var columnVisibility: NavigationSplitViewVisibility = .all
-    @ViewState private var isImportingModpack = false
-    @ViewState private var isImportingMinecraftFolder = false
 
     var body: some View {
         rootContent
@@ -27,24 +24,10 @@ struct ContentView: View {
         .toolbar {
             if store.selection == .home {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Menu {
-                        Button {
-                            store.presentNewInstance()
-                        } label: {
-                            Label("新建游戏实例", systemImage: "shippingbox.badge.plus")
-                        }
-                        Button {
-                            isImportingModpack = true
-                        } label: {
-                            Label("导入整合包…", systemImage: "archivebox")
-                        }
-                        Button {
-                            isImportingMinecraftFolder = true
-                        } label: {
-                            Label("导入 .minecraft 文件夹…", systemImage: "folder.badge.plus")
-                        }
+                    Button {
+                        store.presentNewInstance()
                     } label: {
-                        Label("添加实例", systemImage: "plus")
+                        Label("新建游戏实例", systemImage: "plus")
                     }
 
                     Button {
@@ -75,22 +58,6 @@ struct ContentView: View {
         }
         .sheet(isPresented: $store.isPresentingNewInstance) {
             NewInstanceSheet(store: store)
-        }
-        .fileImporter(
-            isPresented: $isImportingModpack,
-            allowedContentTypes: [UTType(filenameExtension: "mrpack") ?? .zip, .zip],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            Task { await store.importModpack(from: url) }
-        }
-        .fileImporter(
-            isPresented: $isImportingMinecraftFolder,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            Task { await store.importMinecraftFolder(from: url) }
         }
         .alert(
             "SwiftLauncher",
@@ -125,9 +92,17 @@ struct ContentView: View {
             store.shouldOpenGameLog = false
         }
         .overlay {
-            // 游戏加载窗口
-            if store.showGameLoadingWindow {
-                GameLoadingWindow(store: store)
+            if store.showGameLoadingOverlay, let instance = store.selectedInstance {
+                ZStack {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+
+                    GameLoadingView(
+                        store: store,
+                        instance: instance,
+                        loadProgress: store.gameLoadProgress
+                    )
+                }
             }
         }
     }

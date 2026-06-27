@@ -427,8 +427,28 @@ actor MinecraftInstaller {
             try extractArchive(item.1, to: destination)
         }
 
+        // 将 .dylib 文件从子目录移动到根目录
+        // LWJGL 3.x 的 natives 被打包在 macos/arm64/org/lwjgl/ 等嵌套结构中
+        // 但是 LWJGL 期望它们在 natives 目录的根目录下
+        let enumerator = FileManager.default.enumerator(
+            at: destination,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let fileURL = enumerator?.nextObject() as? URL {
+            if fileURL.pathExtension == "dylib" || fileURL.pathExtension == "so" {
+                let targetURL = destination.appendingPathComponent(fileURL.lastPathComponent)
+                try? FileManager.default.moveItem(at: fileURL, to: targetURL)
+            }
+        }
+
+        // 清理 META-INF 和其他子目录
         let metaInf = destination.appendingPathComponent("META-INF", isDirectory: true)
         try? FileManager.default.removeItem(at: metaInf)
+
+        // 清理 macos 子目录（已经移动了 dylib）
+        let macosDir = destination.appendingPathComponent("macos", isDirectory: true)
+        try? FileManager.default.removeItem(at: macosDir)
     }
 
     private func installMetadataLoader(
