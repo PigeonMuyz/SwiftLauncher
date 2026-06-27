@@ -131,7 +131,11 @@ actor MinecraftLauncher {
             "has_custom_resolution": instance.resolutionWidth != nil && instance.resolutionHeight != nil,
             "is_demo_user": false
         ])
-        var classpath = metadata.libraries
+
+        // 收集所有库的路径
+        var allLibraryPaths: [String] = []
+
+        allLibraryPaths += metadata.libraries
             .filter { evaluator.allows($0.rules) }
             .compactMap { library -> String? in
                 guard let artifact = library.downloads?.artifact else { return nil }
@@ -140,18 +144,21 @@ actor MinecraftLauncher {
                 return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
             }
         if let loaderProfile {
-            classpath += loaderProfile.libraries.compactMap { library in
+            allLibraryPaths += loaderProfile.libraries.compactMap { library in
                 let url = fileSystem.librariesRoot.appendingPathComponent(MavenCoordinate.path(for: library.name))
                 return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
             }
         }
         if let installerLoaderMetadata {
-            classpath += installerLoaderMetadata.libraries.compactMap { library in
+            allLibraryPaths += installerLoaderMetadata.libraries.compactMap { library in
                 let relative = library.downloads?.artifact?.path ?? MavenCoordinate.path(for: library.name)
                 let url = fileSystem.librariesRoot.appendingPathComponent(relative)
                 return FileManager.default.fileExists(atPath: url.path) ? url.path : nil
             }
         }
+
+        // 去重：对于同一个库的多个版本，只保留最高版本
+        var classpath = deduplicateLibraries(allLibraryPaths)
         classpath.append(fileSystem.versionJAR(instance.versionID).path)
 
         let accessToken: String
@@ -190,6 +197,25 @@ actor MinecraftLauncher {
         ]
 
         var jvm: [String] = ["-Xms512m", "-Xmx\(instance.memoryMB)m"]
+
+        // 支持 Sinytra Connector：在最开始添加模块系统参数
+        if instance.loader == .forge || instance.loader == .neoForge {
+            jvm += [
+                "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+                "--add-opens", "java.base/java.util=ALL-UNNAMED",
+                "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
+                "--add-opens", "java.base/java.text=ALL-UNNAMED",
+                "--add-opens", "java.base/java.net=ALL-UNNAMED",
+                "--add-opens", "java.base/java.lang.module=ALL-UNNAMED",
+                "--add-opens", "java.base/jdk.internal.loader=ALL-UNNAMED",
+                "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                "--add-opens", "java.base/jdk.internal.reflect=ALL-UNNAMED",
+                "--add-exports", "java.base/sun.security.util=ALL-UNNAMED",
+                "--add-exports", "jdk.naming.dns/com.sun.jndi.dns=ALL-UNNAMED,java.naming",
+                "-Dconnector.disableModuleSafetyChecks=true"
+            ]
+        }
+
         if let arguments = metadata.arguments?.jvm {
             jvm += resolve(arguments, evaluator: evaluator, replacements: replacements)
         } else {
@@ -303,6 +329,60 @@ actor MinecraftLauncher {
         }
         if !current.isEmpty { result.append(current) }
         return result
+    }
+
+    /// 去重库文件：对于同一个库的多个版本，只保留最高版本
+    private func deduplicateLibraries(_ libraries: [String]) -> [String] {
+        var libraryMap: [String: (version: String, path: String)] = [:]
+
+        for path in libraries {
+            // 解析库路径，提取组ID、artifact ID 和版本
+            // 例如：.../org/ow2/asm/asm/9.6/asm-9.6.jar
+            let components = path.split(separator: "/")
+            guard components.count >= 3 else {
+                // 无法解析的路径，直接保留
+                libraryMap[path] = ("", path)
+                continue
+            }
+
+            // 找到版本号（倒数第二个组件）和 JAR 文件名（最后一个组件）
+            let version = String(components[components.count - 2])
+
+            // 提取库的基础标识（去掉版本号）
+            // 例如：.../org/ow2/asm/asm/ 作为 key
+            let versionIndex = components.count - 2
+            let baseKey = components[0..<versionIndex].joined(separator: "/")
+
+            // 比较版本号，保留更高的版本
+            if let existing = libraryMap[baseKey] {
+                if compareVersions(version, existing.version) > 0 {
+                    libraryMap[baseKey] = (version, path)
+                }
+            } else {
+                libraryMap[baseKey] = (version, path)
+            }
+        }
+
+        return libraryMap.values.map { $0.path }
+    }
+
+    /// 比较两个版本号字符串
+    /// 返回：1 表示 v1 > v2，-1 表示 v1 < v2，0 表示相等
+    private func compareVersions(_ v1: String, _ v2: String) -> Int {
+        let parts1 = v1.split(separator: ".").compactMap { Int($0) }
+        let parts2 = v2.split(separator: ".").compactMap { Int($0) }
+
+        let maxLength = max(parts1.count, parts2.count)
+
+        for i in 0..<maxLength {
+            let num1 = i < parts1.count ? parts1[i] : 0
+            let num2 = i < parts2.count ? parts2[i] : 0
+
+            if num1 > num2 { return 1 }
+            if num1 < num2 { return -1 }
+        }
+
+        return 0
     }
 
 }

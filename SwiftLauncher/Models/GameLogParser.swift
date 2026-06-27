@@ -54,6 +54,7 @@ struct GameLogParser {
         var totalProgress: Double = 0.0
         var lastError: String?
         var isGameReady: Bool = false
+        var hasFatalError: Bool = false
 
         enum LoadStage: String {
             case initializing = "初始化中..."
@@ -62,6 +63,7 @@ struct GameLogParser {
             case buildingClasspath = "构建类路径..."
             case startingGame = "启动游戏..."
             case ready = "完成"
+            case failed = "启动失败"
 
             var progress: Double {
                 switch self {
@@ -71,6 +73,7 @@ struct GameLogParser {
                 case .buildingClasspath: return 0.7
                 case .startingGame: return 0.9
                 case .ready: return 1.0
+                case .failed: return 0.0
                 }
             }
         }
@@ -172,10 +175,21 @@ struct GameLogParser {
                 progress.isGameReady = true
             }
 
-            // 检测错误
-            if entry.level == .fatal || entry.level == .error {
+            // 检测致命错误
+            if entry.level == .fatal {
+                progress.hasFatalError = true
+                progress.currentStage = .failed
+                progress.lastError = entry.message
+            } else if entry.level == .error {
                 progress.lastError = entry.message
             }
+        }
+
+        // 检测日志中的 Exception
+        let logContent = entries.map { $0.message }.joined(separator: "\n")
+        if logContent.contains("Exception in thread") || logContent.contains("java.lang.") {
+            progress.hasFatalError = true
+            progress.currentStage = .failed
         }
 
         progress.totalProgress = progress.currentStage.progress

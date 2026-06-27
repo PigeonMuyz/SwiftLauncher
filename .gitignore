@@ -3,6 +3,7 @@
 .swiftpm/
 dist/
 artifacts/
+docs/
 .codex/
 design-qa.md
 *.xcuserstate

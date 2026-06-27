@@ -1,99 +1,67 @@
 import SwiftUI
 
 struct GameLoadingView: View {
-    let instanceName: String
-    @Binding var isPresented: Bool
+    let store: LauncherStore
+    let instance: LauncherInstance
     var loadProgress: GameLogParser.GameLoadProgress
-    var logEntries: [GameLogParser.LogEntry]
-    @State private var showDetailedLog = false
 
     var body: some View {
-        ZStack {
-            // 背景模糊效果
-            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
-                .ignoresSafeArea()
+        VStack(spacing: 20) {
+            if loadProgress.hasFatalError {
+                // 错误状态
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 60))
+                    .foregroundStyle(.red)
 
-            VStack(spacing: 24) {
-                // Minecraft 风格标题
                 VStack(spacing: 8) {
-                    Text("Minecraft")
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.green, .green.opacity(0.7)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
+                    Text("启动失败")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
 
-                    Text(instanceName)
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+                    Text("请查看游戏日志了解详情")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
+            } else {
+                // 实例图标
+                InstanceIconView(store: store, instance: instance, size: 80)
+                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
 
-                // 加载动画
-                LoadingCubeAnimation()
-                    .frame(width: 120, height: 120)
+                VStack(spacing: 8) {
+                    // 实例名称
+                    Text(instance.name)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
 
-                // 加载状态
-                VStack(spacing: 12) {
+                    // 加载状态
                     Text(loadProgress.currentStage.rawValue)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.8))
 
-                    // 进度条
                     ProgressView(value: loadProgress.totalProgress)
                         .progressViewStyle(MinecraftProgressStyle())
-                        .frame(width: 300)
+                        .frame(width: 200)
 
-                    // Mod 加载信息
                     if loadProgress.modsFound > 0 {
-                        Text("已发现 \(loadProgress.modsFound) 个 Mod")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    // 错误信息
-                    if let error = loadProgress.lastError {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text(error.prefix(100) + (error.count > 100 ? "..." : ""))
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                                .lineLimit(2)
-                        }
-                        .padding(.horizontal)
+                        Text("\(loadProgress.modsFound) Mods")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.7))
                     }
                 }
-
-                // 操作按钮
-                HStack(spacing: 12) {
-                    Button {
-                        showDetailedLog.toggle()
-                    } label: {
-                        Label("详细日志", systemImage: "doc.text")
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("隐藏") {
-                        isPresented = false
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .padding(.top, 8)
-            }
-            .padding(40)
-            .frame(width: 480, height: 520)
-            .background {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.ultraThinMaterial)
-                    .shadow(color: .black.opacity(0.3), radius: 20)
             }
         }
-        .sheet(isPresented: $showDetailedLog) {
-            DetailedLogView(entries: logEntries)
-        }
+        .padding(30)
+        .frame(width: 280, height: 240)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.black.opacity(0.85))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 10)
     }
 }
 
@@ -104,23 +72,23 @@ struct LoadingCubeAnimation: View {
     var body: some View {
         ZStack {
             // 外层立方体
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 6)
                 .stroke(
                     LinearGradient(
                         colors: [.green, .green.opacity(0.5)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
-                    lineWidth: 3
+                    lineWidth: 2
                 )
-                .frame(width: 80, height: 80)
+                .frame(width: 50, height: 50)
                 .rotation3DEffect(
                     .degrees(rotation),
                     axis: (x: 1, y: 1, z: 0)
                 )
 
             // 内层立方体
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 4)
                 .fill(
                     LinearGradient(
                         colors: [.green.opacity(0.3), .green.opacity(0.1)],
@@ -128,7 +96,7 @@ struct LoadingCubeAnimation: View {
                         endPoint: .bottomTrailing
                     )
                 )
-                .frame(width: 50, height: 50)
+                .frame(width: 30, height: 30)
                 .rotation3DEffect(
                     .degrees(-rotation * 1.5),
                     axis: (x: 0, y: 1, z: 1)
@@ -148,12 +116,12 @@ struct MinecraftProgressStyle: ProgressViewStyle {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
                 // 背景
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: 3)
                     .fill(.black.opacity(0.3))
-                    .frame(height: 24)
+                    .frame(height: 18)
 
                 // 进度条
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: 3)
                     .fill(
                         LinearGradient(
                             colors: [.green, .green.opacity(0.8)],
@@ -163,7 +131,7 @@ struct MinecraftProgressStyle: ProgressViewStyle {
                     )
                     .frame(
                         width: geometry.size.width * CGFloat(configuration.fractionCompleted ?? 0),
-                        height: 24
+                        height: 18
                     )
                     .overlay(alignment: .trailing) {
                         // 进度条末端高光
@@ -174,126 +142,29 @@ struct MinecraftProgressStyle: ProgressViewStyle {
 
                 // 进度百分比
                 Text("\(Int((configuration.fractionCompleted ?? 0) * 100))%")
-                    .font(.caption.bold())
+                    .font(.caption2.bold())
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.5), radius: 2)
                     .frame(maxWidth: .infinity)
             }
         }
-        .frame(height: 24)
+        .frame(height: 18)
     }
 }
 
-// 详细日志视图
-struct DetailedLogView: View {
-    let entries: [GameLogParser.LogEntry]
-    @State private var selectedLevel: GameLogParser.LogLevel?
-
-    var filteredEntries: [GameLogParser.LogEntry] {
-        if let level = selectedLevel {
-            return entries.filter { $0.level.priority >= level.priority }
-        }
-        return entries
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // 标题栏
-            HStack {
-                Text("详细日志")
-                    .font(.headline)
-
-                Spacer()
-
-                // 日志级别过滤
-                Picker("级别", selection: $selectedLevel) {
-                    Text("全部").tag(nil as GameLogParser.LogLevel?)
-                    Text("警告+").tag(GameLogParser.LogLevel.warn as GameLogParser.LogLevel?)
-                    Text("错误+").tag(GameLogParser.LogLevel.error as GameLogParser.LogLevel?)
-                    Text("致命").tag(GameLogParser.LogLevel.fatal as GameLogParser.LogLevel?)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
-            }
-            .padding()
-            .background(.ultraThinMaterial)
-
-            Divider()
-
-            // 日志列表
-            List(filteredEntries) { entry in
-                HStack(alignment: .top, spacing: 12) {
-                    // 级别标记
-                    Circle()
-                        .fill(levelColor(entry.level))
-                        .frame(width: 8, height: 8)
-                        .padding(.top, 6)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(entry.level.rawValue)
-                                .font(.caption.bold())
-                                .foregroundStyle(levelColor(entry.level))
-
-                            Text(entry.logger)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-
-                            Spacer()
-
-                            Text(entry.timestamp, style: .time)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-
-                        Text(entry.message)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.primary)
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            .listStyle(.plain)
-        }
-        .frame(width: 800, height: 600)
-    }
-
-    private func levelColor(_ level: GameLogParser.LogLevel) -> Color {
-        switch level {
-        case .info: return .blue
-        case .warn: return .orange
-        case .error: return .red
-        case .fatal: return .purple
-        }
-    }
-}
-
-// 毛玻璃效果
-struct VisualEffectBlur: NSViewRepresentable {
-    var material: NSVisualEffectView.Material
-    var blendingMode: NSVisualEffectView.BlendingMode
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = blendingMode
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-        nsView.blendingMode = blendingMode
-    }
-}
-
-#Preview {
-    GameLoadingView(
-        instanceName: "我的整合包",
-        isPresented: .constant(true),
-        loadProgress: .init(),
-        logEntries: []
-    )
-}
+//#Preview {
+//    GameLoadingView(
+//        store: LauncherStore(),
+//        instance: LauncherInstance(
+//            id: UUID(),
+//            name: "我的整合包",
+//            versionID: "1.20.1",
+//            loader: .forge
+//        ),
+//        loadProgress: GameLogParser.GameLoadProgress(
+//            currentStage: .loadingMods,
+//            modsFound: 42,
+//            totalProgress: 0.5
+//        )
+//    )
+//}
