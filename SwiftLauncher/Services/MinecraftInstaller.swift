@@ -316,12 +316,20 @@ actor MinecraftInstaller {
     }
 
     private func nativesAreReady(at directory: URL) -> Bool {
-        guard let contents = try? FileManager.default.contentsOfDirectory(
+        guard let contents = FileManager.default.enumerator(
             at: directory,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
-        ) else { return false }
-        return !contents.isEmpty
+        ) else {
+            return false
+        }
+        while let fileURL = contents.nextObject() as? URL {
+            let fileExtension = fileURL.pathExtension.lowercased()
+            if fileExtension == "dylib" || fileExtension == "jnilib" {
+                return true
+            }
+        }
+        return false
     }
 
     private func requiresExtractedNatives(_ libraries: [MinecraftLibrary]) -> Bool {
@@ -500,8 +508,11 @@ actor MinecraftInstaller {
             options: [.skipsHiddenFiles]
         )
         while let fileURL = enumerator?.nextObject() as? URL {
-            if fileURL.pathExtension == "dylib" || fileURL.pathExtension == "so" {
+            if fileURL.pathExtension == "dylib" || fileURL.pathExtension == "jnilib" || fileURL.pathExtension == "so" {
                 let targetURL = destination.appendingPathComponent(fileURL.lastPathComponent)
+                if FileManager.default.fileExists(atPath: targetURL.path) {
+                    try? FileManager.default.removeItem(at: targetURL)
+                }
                 try? FileManager.default.moveItem(at: fileURL, to: targetURL)
             }
         }

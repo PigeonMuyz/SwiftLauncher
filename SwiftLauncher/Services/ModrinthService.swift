@@ -190,12 +190,15 @@ actor ModrinthService {
     func search(
         query: String,
         kind: ModrinthContentKind,
-        gameVersion: String,
+        gameVersion: String?,
         loader: ModLoader,
         categoryGroups: [[String]] = []
     ) async throws -> [ModrinthSearchResult] {
-        var facets = [["project_type:\(kind.modrinthProjectType)"], ["versions:\(gameVersion)"]]
-        if kind.requiresModLoader, loader != .vanilla {
+        var facets = [["project_type:\(kind.modrinthProjectType)"]]
+        if let gameVersion {
+            facets.append(["versions:\(gameVersion)"])
+        }
+        if gameVersion != nil, kind.requiresModLoader, loader != .vanilla {
             facets.append(["categories:\(loader.modrinthName)"])
         }
         for group in categoryGroups where !group.isEmpty {
@@ -224,6 +227,9 @@ actor ModrinthService {
         for instance: LauncherInstance,
         progress: @escaping ProgressHandler
     ) async throws -> Int {
+        guard kind.supportsDirectInstall else {
+            throw LauncherError.unsupported(kind.detail)
+        }
         guard !kind.requiresModLoader || instance.loader != .vanilla else {
             throw LauncherError.unsupported("请先为实例安装 Fabric、Quilt、Forge 或 NeoForge")
         }
@@ -248,10 +254,13 @@ actor ModrinthService {
         let versions = try await compatibleVersions(
             projectID: project.projectID,
             kind: kind,
-            gameVersion: instance.versionID,
+            gameVersion: kind == .modpacks ? nil : instance.versionID,
             loader: instance.loader
         )
         guard !versions.isEmpty else {
+            if kind == .modpacks {
+                throw LauncherError.unsupported("Modrinth 上没有可用的整合包文件")
+            }
             throw LauncherError.unsupported(
                 "Modrinth 上没有适配 \(kind.title) / MC \(instance.versionID) 的文件"
             )
@@ -285,6 +294,46 @@ actor ModrinthService {
             versionNumber: version.versionNumber,
             requiredDependencies: dependencies
         )
+    }
+
+    func downloadModpackArchive(
+        project: ModrinthSearchResult,
+        specificVersionID: String?,
+        instance: LauncherInstance,
+        progress: @escaping ProgressHandler
+    ) async throws -> URL {
+        let version: ModrinthVersion
+        if let specificVersionID {
+            version = try await fetchVersion(id: specificVersionID)
+        } else {
+            guard let compatible = try await compatibleVersions(
+                projectID: project.projectID,
+                kind: .modpacks,
+                gameVersion: nil,
+                loader: instance.loader
+            ).first else {
+                throw LauncherError.unsupported("Modrinth 上没有可用的整合包文件")
+            }
+            version = compatible
+        }
+
+        guard let file = version.primaryFile else {
+            throw LauncherError.missingDownload(version.name)
+        }
+
+        let fileName = URL(fileURLWithPath: file.filename).lastPathComponent
+        let fallbackExtension = fileName.contains(".") ? "" : ".mrpack"
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SwiftLauncher-\(UUID().uuidString)-\(fileName)\(fallbackExtension)")
+
+        await progress(0.18, "正在下载 \(version.name) \(version.versionNumber)")
+        try await downloader.download(
+            from: file.url,
+            to: destination,
+            expectedSHA1: file.hashes["sha1"],
+            expectedSHA512: file.hashes["sha512"]
+        )
+        return destination
     }
 
     private func installProject(
@@ -493,7 +542,7 @@ actor ModrinthService {
     private func compatibleVersions(
         projectID: String,
         kind: ModrinthContentKind,
-        gameVersion: String,
+        gameVersion: String?,
         loader: ModLoader
     ) async throws -> [ModrinthVersion] {
         var components = URLComponents(
@@ -504,9 +553,11 @@ actor ModrinthService {
             resolvingAgainstBaseURL: false
         )!
         var queryItems = [
-            URLQueryItem(name: "game_versions", value: try jsonString([gameVersion])),
             URLQueryItem(name: "include_changelog", value: "false")
         ]
+        if let gameVersion {
+            queryItems.append(URLQueryItem(name: "game_versions", value: try jsonString([gameVersion])))
+        }
         if kind.requiresModLoader {
             queryItems.append(URLQueryItem(name: "loaders", value: try jsonString([loader.modrinthName])))
         }
@@ -549,6 +600,10 @@ actor ModrinthService {
             return gameDirectory.appendingPathComponent("resourcepacks", isDirectory: true)
         case .shaderPacks:
             return gameDirectory.appendingPathComponent("shaderpacks", isDirectory: true)
+        case .dataPacks:
+            return gameDirectory.appendingPathComponent("datapacks", isDirectory: true)
+        case .modpacks:
+            return gameDirectory.appendingPathComponent("modpacks", isDirectory: true)
         }
     }
 
@@ -556,6 +611,7 @@ actor ModrinthService {
         switch kind {
         case .mods: "jar"
         case .resourcePacks, .shaderPacks: "zip"
+        case .dataPacks, .modpacks: "zip"
         }
     }
 }

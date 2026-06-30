@@ -15,6 +15,10 @@ struct LauncherInstance: Codable, Identifiable, Hashable, Sendable {
     var isVersionIsolated: Bool
     var accountID: UUID?
     var iconFileName: String?
+    var launchTitle: String?
+    var autoJoinServer: Bool
+    var serverHost: String
+    var serverPort: Int?
     let createdAt: Date
     var lastPlayedAt: Date?
 
@@ -33,6 +37,10 @@ struct LauncherInstance: Codable, Identifiable, Hashable, Sendable {
         isVersionIsolated: Bool = true,
         accountID: UUID? = nil,
         iconFileName: String? = nil,
+        launchTitle: String? = nil,
+        autoJoinServer: Bool = false,
+        serverHost: String = "",
+        serverPort: Int? = nil,
         createdAt: Date = .now,
         lastPlayedAt: Date? = nil
     ) {
@@ -50,6 +58,10 @@ struct LauncherInstance: Codable, Identifiable, Hashable, Sendable {
         self.isVersionIsolated = isVersionIsolated
         self.accountID = accountID
         self.iconFileName = iconFileName
+        self.launchTitle = launchTitle
+        self.autoJoinServer = autoJoinServer
+        self.serverHost = serverHost
+        self.serverPort = serverPort
         self.createdAt = createdAt
         self.lastPlayedAt = lastPlayedAt
     }
@@ -57,7 +69,8 @@ struct LauncherInstance: Codable, Identifiable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, name, versionID, javaPath, usesAutomaticJava, memoryMB, resolutionWidth, resolutionHeight
         case additionalJVMArguments, loader, loaderVersion, isVersionIsolated
-        case accountID, iconFileName, createdAt, lastPlayedAt
+        case accountID, iconFileName, launchTitle, autoJoinServer, serverHost, serverPort
+        case createdAt, lastPlayedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -82,8 +95,17 @@ struct LauncherInstance: Codable, Identifiable, Hashable, Sendable {
         isVersionIsolated = try container.decodeIfPresent(Bool.self, forKey: .isVersionIsolated) ?? true
         accountID = try container.decodeIfPresent(UUID.self, forKey: .accountID)
         iconFileName = try container.decodeIfPresent(String.self, forKey: .iconFileName)
+        launchTitle = try container.decodeIfPresent(String.self, forKey: .launchTitle)
+        autoJoinServer = try container.decodeIfPresent(Bool.self, forKey: .autoJoinServer) ?? false
+        serverHost = try container.decodeIfPresent(String.self, forKey: .serverHost) ?? ""
+        serverPort = try container.decodeIfPresent(Int.self, forKey: .serverPort)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
         lastPlayedAt = try container.decodeIfPresent(Date.self, forKey: .lastPlayedAt)
+    }
+
+    var effectiveLaunchTitle: String {
+        let trimmed = launchTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? name : trimmed
     }
 
     func hasShaderSupport(mods: [ModFile]) -> Bool {
@@ -140,6 +162,10 @@ enum LauncherExperienceMode: String, CaseIterable, Identifiable, Sendable {
         case .expert: "安装前展示兼容版本与前置模组详情，并提供 Modrinth 页面链接。"
         }
     }
+}
+
+enum GameLoadingWindowPreference {
+    static let defaultsKey = "showGameLoadingWindow"
 }
 
 struct LoaderVersionInfo: Codable, Identifiable, Hashable, Sendable {
@@ -253,6 +279,8 @@ enum DownloadJobKind: String, CaseIterable, Identifiable, Sendable {
     case modInstall
     case resourcePackInstall
     case shaderPackInstall
+    case dataPackInstall
+    case modpackInstall
     case javaRuntime
 
     var id: Self { self }
@@ -265,6 +293,8 @@ enum DownloadJobKind: String, CaseIterable, Identifiable, Sendable {
         case .modInstall: "模组安装"
         case .resourcePackInstall: "资源包安装"
         case .shaderPackInstall: "光影包安装"
+        case .dataPackInstall: "数据包安装"
+        case .modpackInstall: "整合包安装"
         case .javaRuntime: "Java 运行时"
         }
     }
@@ -277,6 +307,8 @@ enum DownloadJobKind: String, CaseIterable, Identifiable, Sendable {
         case .modInstall: "puzzlepiece.extension"
         case .resourcePackInstall: "photo.stack"
         case .shaderPackInstall: "sparkles"
+        case .dataPackInstall: "doc.text"
+        case .modpackInstall: "archivebox"
         case .javaRuntime: "cup.and.saucer"
         }
     }
@@ -433,6 +465,8 @@ enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
     case mods
     case resourcePacks
     case shaderPacks
+    case dataPacks
+    case modpacks
 
     var id: Self { self }
 
@@ -441,6 +475,8 @@ enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
         case .mods: "模组"
         case .resourcePacks: "资源包"
         case .shaderPacks: "光影"
+        case .dataPacks: "数据包"
+        case .modpacks: "整合包"
         }
     }
 
@@ -449,6 +485,8 @@ enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
         case .mods: "按实例的 Minecraft 版本和加载器过滤，并可自动补全必需前置。"
         case .resourcePacks: "按 Minecraft 版本过滤，安装到所选实例的资源包目录。"
         case .shaderPacks: "按 Minecraft 版本过滤，安装到所选实例的光影包目录。"
+        case .dataPacks: "按 Minecraft 版本过滤；数据包安装需要选择具体世界。"
+        case .modpacks: "整合包会创建或导入完整实例，不安装到当前实例目录。"
         }
     }
 
@@ -457,6 +495,8 @@ enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
         case .mods: "puzzlepiece.extension"
         case .resourcePacks: "photo.stack"
         case .shaderPacks: "sparkles"
+        case .dataPacks: "doc.text"
+        case .modpacks: "archivebox"
         }
     }
 
@@ -465,6 +505,8 @@ enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
         case .mods: "mod"
         case .resourcePacks: "resourcepack"
         case .shaderPacks: "shader"
+        case .dataPacks: "datapack"
+        case .modpacks: "modpack"
         }
     }
 
@@ -473,6 +515,8 @@ enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
         case .mods: .modInstall
         case .resourcePacks: .resourcePackInstall
         case .shaderPacks: .shaderPackInstall
+        case .dataPacks: .dataPackInstall
+        case .modpacks: .modpackInstall
         }
     }
 
@@ -481,11 +525,30 @@ enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
         case .mods: nil
         case .resourcePacks: .resourcePacks
         case .shaderPacks: .shaderPacks
+        case .dataPacks, .modpacks: nil
         }
     }
 
     var requiresModLoader: Bool {
         self == .mods
+    }
+
+    var supportsDirectInstall: Bool {
+        switch self {
+        case .mods, .resourcePacks, .shaderPacks:
+            true
+        case .dataPacks, .modpacks:
+            false
+        }
+    }
+
+    var supportsCurrentInstanceVersionFilter: Bool {
+        switch self {
+        case .mods, .resourcePacks, .shaderPacks, .dataPacks:
+            true
+        case .modpacks:
+            false
+        }
     }
 }
 

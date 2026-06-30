@@ -26,25 +26,30 @@ struct GameLogParser {
         let message: String
 
         var isModLoading: Bool {
-            logger.contains("moddiscovery") || message.contains("Found mod file")
+            let lowerLogger = logger.lowercased()
+            let lowerMessage = message.lowercased()
+            return lowerLogger.contains("moddiscovery")
+                || lowerMessage.contains("found mod file")
+                || lowerMessage.contains("loading mod")
+                || lowerMessage.contains("loading mods")
         }
 
         var modName: String? {
-            if message.contains("Found mod file") {
-                let pattern = #"Found mod file (.+?)\.jar"#
-                if let regex = try? NSRegularExpression(pattern: pattern),
-                   let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
-                   let range = Range(match.range(at: 1), in: message) {
-                    return String(message[range])
-                }
+            guard message.contains("Found mod file") else { return nil }
+            let pattern = #"Found mod file (.+?)\.jar"#
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: message, range: NSRange(message.startIndex..., in: message)),
+               let range = Range(match.range(at: 1), in: message) {
+                return String(message[range])
             }
             return nil
         }
 
-        var isGameReady: Bool {
-            message.contains("Minecraft window") ||
-            message.contains("OpenGL Version:") ||
-            message.contains("Loaded") && message.contains("mods")
+        var hasRendererStarted: Bool {
+            message.contains("Backend library:")
+                || message.contains("OpenGL Version:")
+                || message.contains("Created:") && message.contains("textures")
+                || message.contains("Sound engine started")
         }
     }
 
@@ -62,16 +67,18 @@ struct GameLogParser {
             case loadingMods = "加载 Mod..."
             case buildingClasspath = "构建类路径..."
             case startingGame = "启动游戏..."
-            case ready = "完成"
+            case waitingForWindow = "等待游戏窗口..."
+            case ready = "加载完成"
             case failed = "启动失败"
 
             var progress: Double {
                 switch self {
-                case .initializing: return 0.1
-                case .scanningMods: return 0.3
-                case .loadingMods: return 0.5
-                case .buildingClasspath: return 0.7
-                case .startingGame: return 0.9
+                case .initializing: return 0.10
+                case .scanningMods: return 0.28
+                case .loadingMods: return 0.50
+                case .buildingClasspath: return 0.68
+                case .startingGame: return 0.82
+                case .waitingForWindow: return 0.92
                 case .ready: return 1.0
                 case .failed: return 0.0
                 }
@@ -79,103 +86,108 @@ struct GameLogParser {
         }
     }
 
-    // 解析 XML 格式的 log4j 日志
     static func parseXMLLog(_ xmlContent: String) -> [LogEntry] {
-        var entries: [LogEntry] = []
-
-        let pattern = #"<log4j:Event logger="([^"]*)" timestamp="(\d+)" level="(\w+)" thread="([^"]*)">[\s\S]*?<log4j:Message><!\[CDATA\[([\s\S]*?)\]\]></log4j:Message>"#
-
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return entries }
-
-        let nsString = xmlContent as NSString
-        let matches = regex.matches(in: xmlContent, range: NSRange(location: 0, length: nsString.length))
-
-        for match in matches {
-            guard match.numberOfRanges == 6 else { continue }
-
-            let logger = nsString.substring(with: match.range(at: 1))
-            let timestampStr = nsString.substring(with: match.range(at: 2))
-            let levelStr = nsString.substring(with: match.range(at: 3))
-            let thread = nsString.substring(with: match.range(at: 4))
-            let message = nsString.substring(with: match.range(at: 5))
-
-            guard let timestampMs = Double(timestampStr),
-                  let level = LogLevel(rawValue: levelStr) else { continue }
-
-            let timestamp = Date(timeIntervalSince1970: timestampMs / 1000.0)
-
-            entries.append(LogEntry(
-                timestamp: timestamp,
-                level: level,
-                logger: logger,
-                thread: thread,
-                message: message
-            ))
-        }
-
-        return entries
+        eventRecords(in: xmlContent).map(\.entry)
     }
 
-    // 从日志中提取致命错误
+    static func parseLogStream(
+        _ logContent: String,
+        previousEntryCount: Int = 0
+    ) -> (entries: [LogEntry], newEntriesCount: Int) {
+        let allEntries = parseLogEntries(logContent)
+        let newEntries = allEntries.count - previousEntryCount
+        return (allEntries, max(0, newEntries))
+    }
+
+    static func displayText(from logContent: String) -> String {
+        let records = eventRecords(in: logContent)
+        guard !records.isEmpty else { return logContent }
+
+        var lines: [String] = []
+        var cursor = 0
+        let nsString = logContent as NSString
+
+        for record in records {
+            appendRawLines(
+                from: nsString.substring(with: NSRange(location: cursor, length: record.range.location - cursor)),
+                to: &lines
+            )
+            lines.append(displayLine(for: record.entry))
+            cursor = record.range.location + record.range.length
+        }
+
+        if cursor < nsString.length {
+            appendRawLines(
+                from: nsString.substring(with: NSRange(location: cursor, length: nsString.length - cursor)),
+                to: &lines
+            )
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
     static func extractFatalError(_ logContent: String) -> String? {
-        // 检查是否有 Exception
-        if logContent.contains("Exception in thread") {
-            let lines = logContent.split(separator: "\n")
+        let entries = parseLogEntries(logContent)
+        if let fatal = entries.first(where: { $0.level == .fatal }) {
+            return fatal.message
+        }
+
+        let plainText = displayText(from: logContent)
+        if plainText.contains("Exception in thread") {
+            let lines = plainText.split(separator: "\n", omittingEmptySubsequences: false)
             var errorLines: [String] = []
             var foundException = false
 
             for line in lines {
-                let lineStr = String(line)
-                if lineStr.contains("Exception in thread") {
+                let lineString = String(line)
+                if lineString.contains("Exception in thread") {
                     foundException = true
-                    errorLines.append(lineStr)
+                    errorLines.append(lineString)
                 } else if foundException {
-                    if lineStr.starts(with: "\tat ") || lineStr.starts(with: "\t") {
-                        if errorLines.count < 5 {  // 只保留前几行堆栈
-                            errorLines.append(lineStr)
-                        }
-                    } else if !lineStr.trimmingCharacters(in: .whitespaces).isEmpty {
+                    let trimmed = lineString.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("at ") || trimmed.hasPrefix("Caused by:") || trimmed.hasPrefix("[STDERR]:") {
+                        if errorLines.count < 8 { errorLines.append(lineString) }
+                    } else if !trimmed.isEmpty {
                         break
                     }
                 }
             }
-
-            if !errorLines.isEmpty {
-                return errorLines.joined(separator: "\n")
-            }
-        }
-
-        // 检查 FATAL 级别日志
-        if let fatalMatch = logContent.range(of: #"level="FATAL".*?<log4j:Message><!\[CDATA\[(.*?)\]\]>"#, options: .regularExpression) {
-            return String(logContent[fatalMatch])
+            if !errorLines.isEmpty { return errorLines.joined(separator: "\n") }
         }
 
         return nil
     }
 
-    // 分析加载进度
-    static func analyzeLoadProgress(_ entries: [LogEntry]) -> GameLoadProgress {
+    static func analyzeLoadProgress(
+        _ entries: [LogEntry],
+        previousProgress: Double = 0,
+        elapsedTime: TimeInterval = 0,
+        gameWindowVisible: Bool = false
+    ) -> GameLoadProgress {
         var progress = GameLoadProgress()
+        var rendererStarted = false
 
         for entry in entries {
-            // 检测加载阶段
-            if entry.message.contains("Scanning mod candidates") {
-                progress.currentStage = .scanningMods
-            } else if entry.message.contains("Found mod file") {
-                progress.modsFound += 1
-                if progress.currentStage == .scanningMods || progress.currentStage == .initializing {
-                    progress.currentStage = .loadingMods
-                }
-            } else if entry.message.contains("Building") || entry.message.contains("module layer") {
-                progress.currentStage = .buildingClasspath
-            } else if entry.message.contains("Launching") || entry.message.contains("Starting") {
-                progress.currentStage = .startingGame
-            } else if entry.isGameReady {
-                progress.currentStage = .ready
-                progress.isGameReady = true
+            if entry.isModLoading {
+                progress.modsFound += entry.modName == nil ? 0 : 1
             }
 
-            // 检测致命错误
+            if entry.message.contains("Scanning mod candidates") {
+                progress.currentStage = .scanningMods
+            } else if entry.isModLoading {
+                progress.currentStage = .loadingMods
+            } else if entry.message.localizedCaseInsensitiveContains("building")
+                || entry.message.localizedCaseInsensitiveContains("module layer")
+                || entry.message.localizedCaseInsensitiveContains("classpath") {
+                progress.currentStage = .buildingClasspath
+            } else if entry.message.localizedCaseInsensitiveContains("launching")
+                || entry.message.localizedCaseInsensitiveContains("starting")
+                || entry.hasRendererStarted {
+                progress.currentStage = .startingGame
+            }
+
+            rendererStarted = rendererStarted || entry.hasRendererStarted
+
             if entry.level == .fatal {
                 progress.hasFatalError = true
                 progress.currentStage = .failed
@@ -185,21 +197,145 @@ struct GameLogParser {
             }
         }
 
-        // 检测日志中的 Exception
-        let logContent = entries.map { $0.message }.joined(separator: "\n")
-        if logContent.contains("Exception in thread") || logContent.contains("java.lang.") {
+        let logContent = entries.map(\.message).joined(separator: "\n")
+        if containsFatalSignal(logContent) {
             progress.hasFatalError = true
             progress.currentStage = .failed
+            progress.lastError = extractFatalError(logContent) ?? progress.lastError
         }
 
-        progress.totalProgress = progress.currentStage.progress
+        if !progress.hasFatalError {
+            if gameWindowVisible {
+                progress.currentStage = .ready
+                progress.isGameReady = true
+            } else if rendererStarted {
+                progress.currentStage = .waitingForWindow
+            }
+        }
+
+        if progress.hasFatalError {
+            progress.totalProgress = max(previousProgress, 0.02)
+        } else if progress.isGameReady {
+            progress.totalProgress = 1
+        } else {
+            let estimated = min(0.92, 0.10 + elapsedTime / 55.0 * 0.72)
+            progress.totalProgress = max(previousProgress, progress.currentStage.progress, estimated)
+        }
+
         return progress
     }
 
-    // 实时解析日志流
-    static func parseLogStream(_ logContent: String, previousEntryCount: Int = 0) -> (entries: [LogEntry], newEntriesCount: Int) {
-        let allEntries = parseXMLLog(logContent)
-        let newEntries = allEntries.count - previousEntryCount
-        return (allEntries, max(0, newEntries))
+    private struct EventRecord {
+        let range: NSRange
+        let entry: LogEntry
+    }
+
+    private static func parseLogEntries(_ logContent: String) -> [LogEntry] {
+        let records = eventRecords(in: logContent)
+        var entries: [LogEntry] = []
+        var cursor = 0
+        let nsString = logContent as NSString
+
+        for record in records {
+            entries += rawEntries(
+                from: nsString.substring(with: NSRange(location: cursor, length: record.range.location - cursor))
+            )
+            entries.append(record.entry)
+            cursor = record.range.location + record.range.length
+        }
+
+        if cursor < nsString.length {
+            entries += rawEntries(
+                from: nsString.substring(with: NSRange(location: cursor, length: nsString.length - cursor))
+            )
+        }
+
+        return entries
+    }
+
+    private static func eventRecords(in logContent: String) -> [EventRecord] {
+        let pattern = #"<log4j:Event\s+logger="([^"]*)"\s+timestamp="(\d+)"\s+level="(\w+)"\s+thread="([^"]*)">\s*<log4j:Message>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))</log4j:Message>\s*</log4j:Event>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+
+        let nsString = logContent as NSString
+        return regex.matches(in: logContent, range: NSRange(location: 0, length: nsString.length)).compactMap { match in
+            guard match.numberOfRanges == 7 else { return nil }
+            let logger = nsString.substring(with: match.range(at: 1))
+            let timestampString = nsString.substring(with: match.range(at: 2))
+            let levelString = nsString.substring(with: match.range(at: 3))
+            let thread = nsString.substring(with: match.range(at: 4))
+            let cdataRange = match.range(at: 5)
+            let plainRange = match.range(at: 6)
+            let messageRange = cdataRange.location != NSNotFound ? cdataRange : plainRange
+
+            guard let timestampMilliseconds = Double(timestampString),
+                  let level = LogLevel(rawValue: levelString),
+                  messageRange.location != NSNotFound else { return nil }
+
+            let message = decodeXMLText(nsString.substring(with: messageRange))
+            return EventRecord(
+                range: match.range,
+                entry: LogEntry(
+                    timestamp: Date(timeIntervalSince1970: timestampMilliseconds / 1000.0),
+                    level: level,
+                    logger: logger,
+                    thread: thread,
+                    message: message
+                )
+            )
+        }
+    }
+
+    private static func rawEntries(from rawText: String) -> [LogEntry] {
+        rawText
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { line in
+                LogEntry(
+                    timestamp: .distantPast,
+                    level: level(forRawLine: line),
+                    logger: "raw",
+                    thread: "",
+                    message: line
+                )
+            }
+    }
+
+    private static func appendRawLines(from rawText: String, to lines: inout [String]) {
+        let rawLines = rawText
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        lines.append(contentsOf: rawLines)
+    }
+
+    private static func displayLine(for entry: LogEntry) -> String {
+        let source = entry.logger.isEmpty ? entry.thread : "\(entry.thread)/\(entry.logger)"
+        return "[\(entry.level.rawValue)] [\(source)] \(entry.message)"
+    }
+
+    private static func level(forRawLine line: String) -> LogLevel {
+        let lower = line.lowercased()
+        if lower.contains("fatal") || lower.contains("exception in thread") { return .fatal }
+        if lower.contains("error") || lower.contains("exception") || lower.contains("failed") { return .error }
+        if lower.contains("warn") { return .warn }
+        return .info
+    }
+
+    private static func containsFatalSignal(_ text: String) -> Bool {
+        text.contains("Exception in thread")
+            || text.contains("java.lang.NoClassDefFoundError")
+            || text.contains("java.lang.UnsatisfiedLinkError")
+            || text.contains("Failed to locate library")
+    }
+
+    private static func decodeXMLText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&apos;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
     }
 }

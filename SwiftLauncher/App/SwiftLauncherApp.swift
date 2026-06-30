@@ -47,6 +47,24 @@ struct SwiftLauncherApp: App {
                 .frame(minWidth: 760, minHeight: 480)
         }
 
+        Window("启动游戏", id: "game-loading") {
+            if let instance = store.gameLoadingInstance {
+                GameLoadingView(
+                    store: store,
+                    instance: instance,
+                    loadProgress: store.gameLoadProgress
+                )
+                .background(LoadingWindowChromeView())
+            } else {
+                ProgressView("正在准备游戏启动…")
+                    .frame(width: 320, height: 160)
+                    .background(LoadingWindowChromeView())
+            }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultPosition(.center)
+        .defaultSize(width: 320, height: 160)
+
         Settings {
             SettingsView(store: store)
         }

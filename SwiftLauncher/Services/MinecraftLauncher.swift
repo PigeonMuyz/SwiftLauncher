@@ -57,7 +57,7 @@ actor MinecraftLauncher {
 
         let logURL = fileSystem.latestLogURL()
         let launchHeader = """
-        [SwiftLauncher] 游戏版本名称：\(instance.name)
+        [SwiftLauncher] 游戏版本名称：\(instance.effectiveLaunchTitle)
         [SwiftLauncher] 启动器品牌：SwiftLauncher/\(launcherVersion)
 
         """
@@ -158,7 +158,7 @@ actor MinecraftLauncher {
         }
 
         // 去重：对于同一个库的多个版本，只保留最高版本
-        var classpath = deduplicateLibraries(allLibraryPaths)
+        var classpath = uniqueLibraryPaths(allLibraryPaths)
         classpath.append(fileSystem.versionJAR(instance.versionID).path)
 
         let accessToken: String
@@ -174,7 +174,7 @@ actor MinecraftLauncher {
 
         let replacements: [String: String] = [
             "${auth_player_name}": account.username,
-            "${version_name}": instance.name,
+            "${version_name}": instance.effectiveLaunchTitle,
             "${game_directory}": gameDirectory.path,
             "${assets_root}": fileSystem.assetsRoot.path,
             "${assets_index_name}": metadata.assetIndex?.id ?? metadata.assets ?? "legacy",
@@ -221,6 +221,10 @@ actor MinecraftLauncher {
         } else {
             jvm += ["-Djava.library.path=\(nativesDirectory.path)", "-cp", classpath.joined(separator: ":")]
         }
+        jvm += [
+            "-Djava.library.path=\(nativesDirectory.path)",
+            "-Dorg.lwjgl.librarypath=\(nativesDirectory.path)"
+        ]
         if let loaderArguments = loaderProfile?.arguments?.jvm {
             jvm += resolve(loaderArguments, evaluator: evaluator, replacements: replacements)
         }
@@ -255,11 +259,18 @@ actor MinecraftLauncher {
         if let loaderArguments = installerLoaderMetadata?.arguments?.game {
             game += resolve(loaderArguments, evaluator: evaluator, replacements: replacements)
         }
-        game = Self.replacingOption("--version", with: instance.name, in: game)
+        game = Self.replacingOption("--version", with: instance.effectiveLaunchTitle, in: game)
         game = Self.replacingOption("--versionType", with: launcherIdentity, in: game)
 
         if let width = instance.resolutionWidth, let height = instance.resolutionHeight {
             game += ["--width", String(width), "--height", String(height)]
+        }
+        let serverHost = instance.serverHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if instance.autoJoinServer, !serverHost.isEmpty {
+            game += ["--server", serverHost]
+            if let port = instance.serverPort, port > 0 {
+                game += ["--port", String(port)]
+            }
         }
         let mainClass = loaderProfile?.mainClass ?? installerLoaderMetadata?.mainClass ?? metadata.mainClass
         return jvm + [mainClass] + game
@@ -331,58 +342,9 @@ actor MinecraftLauncher {
         return result
     }
 
-    /// 去重库文件：对于同一个库的多个版本，只保留最高版本
-    private func deduplicateLibraries(_ libraries: [String]) -> [String] {
-        var libraryMap: [String: (version: String, path: String)] = [:]
-
-        for path in libraries {
-            // 解析库路径，提取组ID、artifact ID 和版本
-            // 例如：.../org/ow2/asm/asm/9.6/asm-9.6.jar
-            let components = path.split(separator: "/")
-            guard components.count >= 3 else {
-                // 无法解析的路径，直接保留
-                libraryMap[path] = ("", path)
-                continue
-            }
-
-            // 找到版本号（倒数第二个组件）和 JAR 文件名（最后一个组件）
-            let version = String(components[components.count - 2])
-
-            // 提取库的基础标识（去掉版本号）
-            // 例如：.../org/ow2/asm/asm/ 作为 key
-            let versionIndex = components.count - 2
-            let baseKey = components[0..<versionIndex].joined(separator: "/")
-
-            // 比较版本号，保留更高的版本
-            if let existing = libraryMap[baseKey] {
-                if compareVersions(version, existing.version) > 0 {
-                    libraryMap[baseKey] = (version, path)
-                }
-            } else {
-                libraryMap[baseKey] = (version, path)
-            }
-        }
-
-        return libraryMap.values.map { $0.path }
-    }
-
-    /// 比较两个版本号字符串
-    /// 返回：1 表示 v1 > v2，-1 表示 v1 < v2，0 表示相等
-    private func compareVersions(_ v1: String, _ v2: String) -> Int {
-        let parts1 = v1.split(separator: ".").compactMap { Int($0) }
-        let parts2 = v2.split(separator: ".").compactMap { Int($0) }
-
-        let maxLength = max(parts1.count, parts2.count)
-
-        for i in 0..<maxLength {
-            let num1 = i < parts1.count ? parts1[i] : 0
-            let num2 = i < parts2.count ? parts2[i] : 0
-
-            if num1 > num2 { return 1 }
-            if num1 < num2 { return -1 }
-        }
-
-        return 0
+    private func uniqueLibraryPaths(_ libraries: [String]) -> [String] {
+        var seen: Set<String> = []
+        return libraries.filter { seen.insert($0).inserted }
     }
 
 }
