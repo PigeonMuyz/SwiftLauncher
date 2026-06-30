@@ -119,6 +119,65 @@ func forgeInstallerCoordinate() {
     )
 }
 
+@Test("安装诊断会报告缺少基础安装标记")
+func installationDiagnosisReportsMissingBaseMarker() async throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SwiftLauncherTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let fileSystem = LauncherFileSystem(root: root)
+    try await fileSystem.prepare()
+
+    let version = MinecraftVersion(
+        id: "1.20.1",
+        type: .release,
+        url: URL(string: "https://example.com/1.20.1.json")!,
+        time: .now,
+        releaseTime: .now,
+        sha1: "manifest-sha1",
+        complianceLevel: nil
+    )
+    let metadata = VersionMetadata(
+        id: version.id,
+        type: .release,
+        mainClass: "net.minecraft.client.main.Main",
+        assets: nil,
+        assetIndex: nil,
+        downloads: [
+            "client": DownloadArtifact(
+                sha1: nil,
+                size: nil,
+                url: URL(string: "https://example.com/client.jar")!,
+                path: nil
+            )
+        ],
+        libraries: [],
+        arguments: nil,
+        minecraftArguments: nil,
+        javaVersion: nil,
+        logging: nil,
+        inheritsFrom: nil
+    )
+
+    try FileManager.default.createDirectory(
+        at: fileSystem.versionDirectory(version.id),
+        withIntermediateDirectories: true
+    )
+    try JSONCoding.makeEncoder().encode(metadata)
+        .write(to: fileSystem.versionJSON(version.id), options: [.atomic])
+
+    let installer = MinecraftInstaller(
+        metadataService: MojangMetadataService(),
+        downloader: FileDownloadService(),
+        fileSystem: fileSystem
+    )
+    let instance = LauncherInstance(name: "Diagnosis", versionID: version.id)
+    let check = await installer.checkInstallation(instance: instance, version: version)
+
+    #expect(!check.isComplete)
+    #expect(check.issue?.errorDescription?.contains("基础安装标记") == true)
+}
+
 @Test("log4j XML 日志会转换成可读文本")
 func log4jDisplayTextIsReadable() {
     let log = """
