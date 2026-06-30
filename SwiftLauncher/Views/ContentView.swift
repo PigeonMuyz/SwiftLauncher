@@ -3,8 +3,14 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var store: LauncherStore
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openURL) private var openURL
+    @AppStorage(LauncherAppearancePreference.accentColorDefaultsKey) private var accentColor = LauncherAccentColor.green.rawValue
     @ViewState private var columnVisibility: NavigationSplitViewVisibility = .all
+
+    private var selectedAccentColor: LauncherAccentColor {
+        LauncherAccentColor(rawValue: accentColor) ?? .green
+    }
 
     var body: some View {
         rootContent
@@ -20,7 +26,7 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .preferredColorScheme(.dark)
-        .tint(Color(red: 0.62, green: 0.76, blue: 0.36))
+        .tint(selectedAccentColor.color)
         .sheet(isPresented: $store.isPresentingNewInstance) {
             NewInstanceSheet(store: store)
         }
@@ -56,18 +62,11 @@ struct ContentView: View {
             openWindow(id: "logs")
             store.shouldOpenGameLog = false
         }
-        .overlay {
-            if store.showGameLoadingOverlay, let instance = store.selectedInstance {
-                ZStack {
-                    Color.black.opacity(0.4)
-                        .ignoresSafeArea()
-
-                    GameLoadingView(
-                        store: store,
-                        instance: instance,
-                        loadProgress: store.gameLoadProgress
-                    )
-                }
+        .onChange(of: store.showGameLoadingOverlay) { _, shouldShow in
+            if shouldShow {
+                openWindow(id: "game-loading")
+            } else {
+                dismissWindow(id: "game-loading")
             }
         }
     }
@@ -76,7 +75,16 @@ struct ContentView: View {
     private var detailContainer: some View {
         selectedDetail
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .navigationTitle(store.selection.title)
+            .navigationTitle(navigationTitle)
+    }
+
+    private var navigationTitle: String {
+        switch store.selection {
+        case .downloadVersions, .instanceResources:
+            ""
+        default:
+            store.selection.title
+        }
     }
 
     @ViewBuilder

@@ -16,7 +16,17 @@ struct ModrinthDetailsSheet: View {
     }
 
     private var installButtonTitle: String {
-        guard plan?.kind == .mods else { return "安装此版本" }
+        guard let plan else { return "安装此版本" }
+        switch plan.kind {
+        case .mods:
+            break
+        case .dataPacks:
+            return "需要世界选择"
+        case .modpacks:
+            return "导入为新实例"
+        case .resourcePacks, .shaderPacks:
+            return "安装此版本"
+        }
         return switch selectedExperienceMode {
         case .beginner:
             "安装此版本及必需前置"
@@ -134,7 +144,7 @@ struct ModrinthDetailsSheet: View {
                             }
                         } else {
                             Section("安装位置") {
-                                Text("\(plan.kind.title)将安装到“\(instance.name)”对应的 \(plan.kind == .resourcePacks ? "resourcepacks" : "shaderpacks") 目录。")
+                                Text(installLocationText(for: plan, instance: instance))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -169,7 +179,7 @@ struct ModrinthDetailsSheet: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
-                        .disabled(store.isLoadingModDetails)
+                        .disabled(store.isLoadingModDetails || plan.kind == .dataPacks)
                     }
                     .padding(16)
                 }
@@ -179,5 +189,20 @@ struct ModrinthDetailsSheet: View {
             }
         }
         .frame(width: 780, height: 680)
+    }
+
+    private func installLocationText(for plan: ModrinthInstallPlan, instance: LauncherInstance) -> String {
+        switch plan.kind {
+        case .resourcePacks:
+            return "资源包将安装到“\(instance.name)”对应的 resourcepacks 目录。"
+        case .shaderPacks:
+            return "光影包将安装到“\(instance.name)”对应的 shaderpacks 目录。"
+        case .dataPacks:
+            return "数据包需要选择具体世界，世界管理接入后会安装到对应世界的 datapacks 目录。"
+        case .modpacks:
+            return "整合包会作为新的游戏实例导入，并在导入后补全游戏核心、加载器和资源。"
+        case .mods:
+            return "模组将安装到“\(instance.name)”对应的 mods 目录。"
+        }
     }
 }

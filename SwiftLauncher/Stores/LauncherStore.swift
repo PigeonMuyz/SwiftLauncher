@@ -45,6 +45,7 @@ final class LauncherStore {
     var logText = "还没有游戏日志。"
     var gameLoadProgress: GameLogParser.GameLoadProgress = .init()
     var showGameLoadingOverlay = false
+    var gameLoadingInstanceID: UUID?
 
     @ObservationIgnored private let fileSystem = LauncherFileSystem.shared
     @ObservationIgnored private var logMonitorTask: Task<Void, Never>?
@@ -52,6 +53,7 @@ final class LauncherStore {
     @ObservationIgnored private let downloader = FileDownloadService()
     @ObservationIgnored private let javaService = JavaRuntimeService()
     @ObservationIgnored private let keychain = KeychainStore()
+    @ObservationIgnored private var gameLaunchStartedAt: Date?
     @ObservationIgnored private let authenticationService = MicrosoftAuthenticationService()
     @ObservationIgnored private let loaderService = LoaderMetadataService()
     @ObservationIgnored private var microsoftLoginTask: Task<Void, Never>?
@@ -78,6 +80,11 @@ final class LauncherStore {
     var selectedInstance: LauncherInstance? {
         get { instances.first { $0.id == selectedInstanceID } }
         set { selectedInstanceID = newValue?.id }
+    }
+
+    var gameLoadingInstance: LauncherInstance? {
+        guard let gameLoadingInstanceID else { return nil }
+        return instances.first { $0.id == gameLoadingInstanceID }
     }
 
     var selectedAccount: PlayerAccount? {
@@ -267,20 +274,19 @@ final class LauncherStore {
         _ kind: ModrinthContentKind,
         query: String,
         categoryGroups: [[String]] = [],
-        for instance: LauncherInstance
+        for instance: LauncherInstance,
+        filtersCurrentInstanceVersion: Bool = false
     ) async {
         guard !isSearchingMods else { return }
-        guard !kind.requiresModLoader || instance.loader != .vanilla else {
-            modrinthSearchResults = []
-            return
-        }
         isSearchingMods = true
         defer { isSearchingMods = false }
         do {
             modrinthSearchResults = try await modrinthService.search(
                 query: query.trimmingCharacters(in: .whitespacesAndNewlines),
                 kind: kind,
-                gameVersion: instance.versionID,
+                gameVersion: filtersCurrentInstanceVersion && kind.supportsCurrentInstanceVersionFilter
+                    ? instance.versionID
+                    : nil,
                 loader: instance.loader,
                 categoryGroups: categoryGroups
             )
@@ -351,6 +357,50 @@ final class LauncherStore {
         let includeRequiredDependencies = mode == .beginner
             || (mode == .normal && normalAutoDependencies)
 
+        if kind == .dataPacks {
+            present(LauncherError.unsupported("数据包需要选择具体世界，后续会和世界管理一起接入。"))
+            return
+        }
+
+        if kind == .modpacks {
+            let result = await downloadManager.run(
+                kind: kind.downloadJobKind,
+                title: project.title,
+                detail: "准备从 Modrinth 导入整合包",
+                instanceID: instance.id
+            ) { reporter in
+                let archive = try await modrinthService.downloadModpackArchive(
+                    project: project,
+                    specificVersionID: specificVersionID,
+                    instance: instance
+                ) { value, detail in
+                    reporter.update(value * 0.25, detail, phase: .downloading)
+                }
+                defer { try? FileManager.default.removeItem(at: archive) }
+
+                reporter.update(0.28, "正在读取整合包", phase: .importing)
+                let result = try await instanceImportService.importModpack(
+                    from: archive,
+                    accountID: selectedAccountID,
+                    knownVersionIDs: Set(manifest?.versions.map(\.id) ?? [])
+                ) { value, detail in
+                    reporter.update(0.28 + value * 0.34, detail, phase: .importing)
+                }
+                await registerImportedInstance(result.instance)
+                reporter.attachToInstance(result.instance.id)
+
+                guard let version = manifest?.versions.first(where: { $0.id == result.instance.versionID }) else {
+                    throw LauncherError.unsupported("整合包声明的 Minecraft 版本不在当前版本清单中")
+                }
+                try await performInstall(result.instance, version: version, reporter: reporter, progressRange: 0.64...1)
+                reporter.update(1, "已导入并安装 \(result.instance.name)", phase: .finalizing)
+            }
+            if case let .failed(error) = result {
+                present(error)
+            }
+            return
+        }
+
         let result = await downloadManager.run(
             kind: kind.downloadJobKind,
             title: project.title,
@@ -388,6 +438,8 @@ final class LauncherStore {
             await loadManagedContent(.resourcePacks, for: instance)
         case .shaderPacks:
             await loadManagedContent(.shaderPacks, for: instance)
+        case .dataPacks, .modpacks:
+            break
         }
     }
 
@@ -591,8 +643,12 @@ final class LauncherStore {
             let launchedProcessID = result.processIdentifier
 
             // 打开加载窗口并开始监控日志
-            openGameLoadingWindow()
-            startLogMonitoring()
+            openGameLoadingWindow(for: instance)
+            if shouldShowGameLoadingWindow {
+                startLogMonitoring()
+            } else {
+                bringGameWindowToFront()
+            }
 
             Task { [weak self] in
                 guard let self else { return }
@@ -906,7 +962,7 @@ final class LauncherStore {
             logText = "还没有游戏日志。"
             return
         }
-        logText = String(text.suffix(200_000))
+        logText = String(GameLogParser.displayText(from: text).suffix(200_000))
     }
 
     func isRunning(_ instance: LauncherInstance) -> Bool {
@@ -1038,11 +1094,28 @@ final class LauncherStore {
     // MARK: - Game Log Monitoring
 
     private func openGameLoadingWindow() {
-        showGameLoadingOverlay = true
+        showGameLoadingOverlay = shouldShowGameLoadingWindow
+    }
+
+    private func openGameLoadingWindow(for instance: LauncherInstance) {
+        gameLoadingInstanceID = instance.id
+        gameLaunchStartedAt = .now
+        gameLoadProgress = .init(currentStage: .startingGame, totalProgress: 0.05)
+        openGameLoadingWindow()
     }
 
     private func closeGameLoadingWindow() {
         showGameLoadingOverlay = false
+        gameLoadingInstanceID = nil
+        gameLaunchStartedAt = nil
+    }
+
+    func dismissGameLoadingWindow() {
+        closeGameLoadingWindow()
+    }
+
+    private var shouldShowGameLoadingWindow: Bool {
+        UserDefaults.standard.object(forKey: GameLoadingWindowPreference.defaultsKey) as? Bool ?? true
     }
 
     private func startLogMonitoring() {
@@ -1053,7 +1126,8 @@ final class LauncherStore {
 
             let logURL = fileSystem.latestLogURL()
             var previousEntryCount = 0
-            var checkCount = 0
+            var didScheduleReadyClose = false
+            var didScheduleFailureClose = false
 
             while !Task.isCancelled {
                 // 读取日志内容
@@ -1065,16 +1139,28 @@ final class LauncherStore {
 
                 // 解析日志
                 let (entries, newCount) = GameLogParser.parseLogStream(content, previousEntryCount: previousEntryCount)
+                let (previousProgress, startedAt, processID) = await MainActor.run {
+                    (self.gameLoadProgress.totalProgress, self.gameLaunchStartedAt ?? .now, self.gameProcessID)
+                }
+                let elapsedTime = Date().timeIntervalSince(startedAt)
+                let gameWindowVisible = processID.map(Self.hasVisibleGameWindow(processID:)) ?? false
+                let nextProgress = GameLogParser.analyzeLoadProgress(
+                    entries,
+                    previousProgress: previousProgress,
+                    elapsedTime: elapsedTime,
+                    gameWindowVisible: gameWindowVisible
+                )
 
-                if newCount > 0 {
+                if newCount > 0 || nextProgress.totalProgress != previousProgress || nextProgress.isGameReady {
                     await MainActor.run {
-                        self.gameLoadProgress = GameLogParser.analyzeLoadProgress(entries)
+                        self.gameLoadProgress = nextProgress
 
                         // 检测游戏是否已准备好
-                        if self.gameLoadProgress.isGameReady {
+                        if self.gameLoadProgress.isGameReady && !didScheduleReadyClose {
+                            didScheduleReadyClose = true
                             // 延迟关闭加载窗口，让用户看到"完成"状态
                             Task {
-                                try? await Task.sleep(for: .seconds(2))
+                                try? await Task.sleep(for: .milliseconds(1200))
                                 await MainActor.run {
                                     self.closeGameLoadingWindow()
                                     self.stopLogMonitoring()
@@ -1085,7 +1171,8 @@ final class LauncherStore {
                         }
 
                         // 检测致命错误
-                        if self.gameLoadProgress.hasFatalError {
+                        if self.gameLoadProgress.hasFatalError && !didScheduleFailureClose {
+                            didScheduleFailureClose = true
                             // 延迟关闭加载窗口，让用户看到错误状态
                             Task {
                                 try? await Task.sleep(for: .seconds(3))
@@ -1099,15 +1186,6 @@ final class LauncherStore {
                         }
                     }
                     previousEntryCount = entries.count
-                }
-
-                checkCount += 1
-                // 30秒后如果还没准备好，自动关闭加载窗口
-                if checkCount > 60 { // 60 * 0.5s = 30s
-                    await MainActor.run {
-                        self.closeGameLoadingWindow()
-                    }
-                    break
                 }
 
                 try? await Task.sleep(for: .milliseconds(500))
@@ -1144,8 +1222,27 @@ final class LauncherStore {
         // 备用方法：通过 NSRunningApplication 激活
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             if let app = NSRunningApplication(processIdentifier: processID) {
-                app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+                app.activate(options: [.activateAllWindows])
             }
+        }
+    }
+
+    nonisolated private static func hasVisibleGameWindow(processID: Int32) -> Bool {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        return windows.contains { window in
+            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int,
+                  ownerPID == Int(processID),
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let width = bounds["Width"] as? Double,
+                  let height = bounds["Height"] as? Double else {
+                return false
+            }
+            return width > 160 && height > 120
         }
     }
 }

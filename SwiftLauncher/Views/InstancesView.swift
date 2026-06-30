@@ -173,6 +173,16 @@ struct InstanceDetailView: View {
                                     .tag(UUID?.some(account.id))
                             }
                         }
+                        TextField(
+                            "游戏窗口标题（默认使用实例名称）",
+                            text: Binding(
+                                get: { draft.launchTitle ?? "" },
+                                set: { value in
+                                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    draft.launchTitle = trimmed.isEmpty ? nil : value
+                                }
+                            )
+                        )
                         Stepper("最大内存：\(draft.memoryMB) MB", value: $draft.memoryMB, in: 1024...32768, step: 512)
                         TextField(
                             "额外 JVM 参数",
@@ -181,6 +191,14 @@ struct InstanceDetailView: View {
                                 set: { draft.additionalJVMArguments = $0.split(separator: " ").map(String.init) }
                             )
                         )
+                    }
+
+                    Section("服务器") {
+                        Toggle("启动后自动加入服务器", isOn: $draft.autoJoinServer)
+                        if draft.autoJoinServer {
+                            TextField("服务器地址，例如 play.example.com", text: $draft.serverHost)
+                            TextField("端口（默认 25565）", value: $draft.serverPort, format: .number)
+                        }
                     }
 
                     Section("窗口") {

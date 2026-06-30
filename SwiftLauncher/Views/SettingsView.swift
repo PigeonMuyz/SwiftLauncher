@@ -9,6 +9,8 @@ struct SettingsView: View {
     @AppStorage(LauncherExperienceMode.defaultsKey) private var experienceMode = LauncherExperienceMode.beginner.rawValue
     @AppStorage(LauncherExperienceMode.autoDependenciesDefaultsKey) private var autoInstallRequiredMods = true
     @AppStorage("instanceDisplayTemplate") private var instanceDisplayTemplate = "${mc_version} · ${mod_loader}"
+    @AppStorage(GameLoadingWindowPreference.defaultsKey) private var showGameLoadingWindow = true
+    @AppStorage(LauncherAppearancePreference.accentColorDefaultsKey) private var accentColor = LauncherAccentColor.green.rawValue
 
     private static let defaultTemplate = "${mc_version} · ${mod_loader}"
 
@@ -90,6 +92,42 @@ struct SettingsView: View {
 
                     Toggle("显示快照版本", isOn: $showSnapshots)
                 }
+                Section("数据目录") {
+                    LabeledContent("位置") {
+                        Button("在访达中显示") { store.openApplicationSupport() }
+                    }
+                }
+                Section("下载源") {
+                    Picker("Minecraft 下载源", selection: $downloadSource) {
+                        ForEach(DownloadSource.allCases) { source in
+                            Text(source.title).tag(source.rawValue)
+                        }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("通用", systemImage: "gearshape") }
+
+            Form {
+                Section("外观") {
+                    Picker("强调色", selection: $accentColor) {
+                        ForEach(LauncherAccentColor.allCases) { color in
+                            HStack {
+                                Circle()
+                                    .fill(color.color)
+                                    .frame(width: 10, height: 10)
+                                Text(color.title)
+                            }
+                            .tag(color.rawValue)
+                        }
+                    }
+                }
+
+                Section("加载窗体") {
+                    Toggle("启动游戏时显示加载窗体", isOn: $showGameLoadingWindow)
+                    LabeledContent("默认样式", value: "紧凑卡片")
+                }
+
                 Section("实例显示格式") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("自定义实例信息显示格式")
@@ -115,21 +153,9 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                Section("数据目录") {
-                    LabeledContent("位置") {
-                        Button("在访达中显示") { store.openApplicationSupport() }
-                    }
-                }
-                Section("下载源") {
-                    Picker("Minecraft 下载源", selection: $downloadSource) {
-                        ForEach(DownloadSource.allCases) { source in
-                            Text(source.title).tag(source.rawValue)
-                        }
-                    }
-                }
             }
             .formStyle(.grouped)
-            .tabItem { Label("通用", systemImage: "gearshape") }
+            .tabItem { Label("个性化", systemImage: "paintpalette") }
 
             Form {
                 Section("Java 版本") {

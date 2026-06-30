@@ -118,3 +118,30 @@ func forgeInstallerCoordinate() {
         ) == "1.20.1-47.3.33"
     )
 }
+
+@Test("log4j XML 日志会转换成可读文本")
+func log4jDisplayTextIsReadable() {
+    let log = """
+    [SwiftLauncher] 游戏版本名称：Minecraft 26.1.1
+      <log4j:Event logger="net.minecraft.client.Minecraft" timestamp="1782803330384" level="INFO" thread="Render thread">
+        <log4j:Message><![CDATA[Setting user: PigeonMuyz]]></log4j:Message>
+      </log4j:Event>
+    """
+    let displayText = GameLogParser.displayText(from: log)
+    #expect(displayText.contains("Setting user: PigeonMuyz"))
+    #expect(!displayText.contains("<log4j:Event"))
+    #expect(!displayText.contains("<![CDATA"))
+}
+
+@Test("渲染初始化日志不会被当作游戏完全启动")
+func rendererLogDoesNotMeanGameReady() {
+    let log = """
+      <log4j:Event logger="net.minecraft.client.Minecraft" timestamp="1782803330427" level="INFO" thread="Render thread">
+        <log4j:Message><![CDATA[Backend library: LWJGL version 3.4.1+2]]></log4j:Message>
+      </log4j:Event>
+    """
+    let entries = GameLogParser.parseLogStream(log).entries
+    let progress = GameLogParser.analyzeLoadProgress(entries, elapsedTime: 20, gameWindowVisible: false)
+    #expect(!progress.isGameReady)
+    #expect(progress.currentStage == .waitingForWindow)
+}

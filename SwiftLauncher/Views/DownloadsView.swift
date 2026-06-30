@@ -4,7 +4,6 @@ struct DownloadsView: View {
     @Bindable var store: LauncherStore
     let section: DownloadSection
     @State private var versionType: VersionType = .release
-    @State private var versionSearch = ""
     @State private var taskFilter: DownloadTaskFilter = .all
 
     init(store: LauncherStore, section: DownloadSection) {
@@ -25,56 +24,55 @@ struct DownloadsView: View {
     }
 
     private var gameDownloads: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: 10) {
-                Picker("版本类型", selection: $versionType) {
-                    ForEach(VersionType.allCases, id: \.self) { type in
-                        Text(type.title).tag(type)
+        TabView(selection: $versionType) {
+            ForEach(VersionType.allCases, id: \.self) { type in
+                versionList(for: type)
+                    .tabItem {
+                        Text(type.title)
                     }
-                }
-                .pickerStyle(.segmented)
-                TextField("搜索 Minecraft 版本", text: $versionSearch)
-                    .textFieldStyle(.roundedBorder)
+                    .tag(type)
             }
-            .padding(14)
+        }
+        .tabViewStyle(.automatic)
+    }
 
-            Divider()
+    private func versionList(for type: VersionType) -> some View {
+        List(filteredVersions(for: type).prefix(300)) { version in
+            HStack(spacing: 12) {
+                Image(systemName: systemImage(for: version.type))
+                    .foregroundStyle(color(for: version.type))
+                    .frame(width: 18)
 
-            List(filteredVersions.prefix(300)) { version in
-                HStack(spacing: 12) {
-                    Image(systemName: version.type == .release ? "tag" : "circle.dotted")
-                        .foregroundStyle(version.type == .release ? .green : .blue)
-                        .frame(width: 18)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Minecraft \(version.id)")
-                            .font(.body.monospacedDigit())
-                        Text("\(version.type.title) · Mojang 官方")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    Text(version.releaseTime, format: .dateTime.year().month().day())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Minecraft \(version.id)")
+                        .font(.body.monospacedDigit())
+                    Text("\(version.type.title) · Mojang 官方")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-
-                    Button {
-                        store.presentNewInstance(versionID: version.id)
-                    } label: {
-                        Label("创建并安装", systemImage: "plus.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
                 }
-                .padding(.vertical, 4)
+
+                Spacer()
+
+                Text(version.releaseTime, format: .dateTime.year().month().day())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    store.presentNewInstance(versionID: version.id)
+                } label: {
+                    Label("创建并安装", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
             }
-            .overlay {
-                if store.manifest == nil {
-                    ProgressView("正在读取版本清单…")
-                } else if filteredVersions.isEmpty {
-                    ContentUnavailableView.search(text: versionSearch)
+            .padding(.vertical, 4)
+        }
+        .overlay {
+            if store.manifest == nil {
+                ProgressView("正在读取版本清单…")
+            } else if filteredVersions(for: type).isEmpty {
+                ContentUnavailableView {
+                    Label("没有\(type.title)版本", systemImage: systemImage(for: type))
                 }
             }
         }
@@ -137,10 +135,26 @@ struct DownloadsView: View {
         }
     }
 
-    private var filteredVersions: [MinecraftVersion] {
+    private func filteredVersions(for type: VersionType) -> [MinecraftVersion] {
         (store.manifest?.versions ?? []).filter {
-            $0.type == versionType
-                && (versionSearch.isEmpty || $0.id.localizedCaseInsensitiveContains(versionSearch))
+            $0.type == type
+        }
+    }
+
+    private func systemImage(for type: VersionType) -> String {
+        switch type {
+        case .release: "tag"
+        case .snapshot: "camera.filters"
+        case .oldBeta: "clock.badge"
+        case .oldAlpha: "clock"
+        }
+    }
+
+    private func color(for type: VersionType) -> Color {
+        switch type {
+        case .release: .green
+        case .snapshot: .blue
+        case .oldBeta, .oldAlpha: .orange
         }
     }
 
