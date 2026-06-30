@@ -573,12 +573,13 @@ final class LauncherStore {
         reporter.update(progressRange.upperBound, "安装完成，SHA-1 校验通过", phase: .finalizing)
     }
 
-    func install(_ instance: LauncherInstance) async {
-        guard let version = manifest?.versions.first(where: { $0.id == instance.versionID }) else { return }
+    @discardableResult
+    func install(_ instance: LauncherInstance) async -> Bool {
+        guard let version = manifest?.versions.first(where: { $0.id == instance.versionID }) else { return false }
 
         // 只检查当前实例是否忙碌
         guard !busyInstances.contains(instance.id),
-              !downloadManager.hasActiveJob(for: instance.id) else { return }
+              !downloadManager.hasActiveJob(for: instance.id) else { return false }
 
         busyInstances.insert(instance.id)
         defer { busyInstances.remove(instance.id) }
@@ -594,6 +595,7 @@ final class LauncherStore {
         if case let .failed(error) = result {
             present(error)
         }
+        return result.succeeded
     }
 
     func launchSelectedInstance() async {
@@ -624,8 +626,16 @@ final class LauncherStore {
 
         if let version,
            !(await installer.installationIsComplete(instance: instance, version: version)) {
-            await install(instance)
-            guard await installer.installationIsComplete(instance: instance, version: version) else { return }
+            guard await install(instance) else { return }
+            let check = await installer.checkInstallation(instance: instance, version: version)
+            guard check.isComplete else {
+                if let issue = check.issue {
+                    present(issue)
+                } else {
+                    present(LauncherError.instanceNotInstalled)
+                }
+                return
+            }
         }
 
         guard let java = preferredRuntime(for: instance) else {

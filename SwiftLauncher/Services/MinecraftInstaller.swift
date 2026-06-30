@@ -5,6 +5,70 @@ private enum LocalArtifactValidation {
     case sizeOnly
 }
 
+enum InstallationCheckResult: Sendable {
+    case complete
+    case incomplete(InstallationIssue)
+
+    var isComplete: Bool {
+        if case .complete = self { return true }
+        return false
+    }
+
+    var issue: InstallationIssue? {
+        if case .incomplete(let issue) = self { return issue }
+        return nil
+    }
+}
+
+enum InstallationIssue: LocalizedError, Sendable {
+    case missingFile(String, String)
+    case unreadableFile(String, String)
+    case invalidJSON(String, String)
+    case mismatch(String)
+    case missingDownload(String)
+    case sizeMismatch(String, String)
+    case checksumUnreadable(String, String)
+    case checksumMismatch(String, String)
+    case incomplete(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingFile(let name, let path):
+            "安装不完整：缺少\(name)（\(path)）。"
+        case .unreadableFile(let name, let reason):
+            "安装不完整：无法读取\(name)。原因：\(reason)"
+        case .invalidJSON(let name, let reason):
+            "安装不完整：\(name) 已损坏或格式不正确。原因：\(reason)"
+        case .mismatch(let message):
+            "安装不完整：\(message)。"
+        case .missingDownload(let name):
+            "安装不完整：版本元数据缺少下载项 \(name)。"
+        case .sizeMismatch(let name, let path):
+            "安装不完整：\(name) 文件大小不匹配（\(path)）。"
+        case .checksumUnreadable(let name, let reason):
+            "安装不完整：无法校验\(name)。原因：\(reason)"
+        case .checksumMismatch(let name, let path):
+            "安装不完整：\(name) 校验失败（\(path)）。"
+        case .incomplete(let message):
+            "安装不完整：\(message)。"
+        }
+    }
+
+    var repairDetail: String {
+        switch self {
+        case .missingFile(let name, _): "\(name) 缺失"
+        case .unreadableFile(let name, _): "\(name) 无法读取"
+        case .invalidJSON(let name, _): "\(name) 已损坏"
+        case .mismatch(let message): message
+        case .missingDownload(let name): "缺少下载项 \(name)"
+        case .sizeMismatch(let name, _): "\(name) 大小不匹配"
+        case .checksumUnreadable(let name, _): "\(name) 无法校验"
+        case .checksumMismatch(let name, _): "\(name) 校验失败"
+        case .incomplete(let message): message
+        }
+    }
+}
+
 actor MinecraftInstaller {
     typealias ProgressHandler = @MainActor @Sendable (Double, String) -> Void
 
@@ -58,13 +122,14 @@ actor MinecraftInstaller {
 
         let evaluator = RuleEvaluator()
         let allowedLibraries = metadata.libraries.filter { evaluator.allows($0.rules) }
-        let baseIsComplete = try baseInstallationIsComplete(
+        let baseCheck = checkBaseInstallation(
             version: version,
             metadata: metadata,
             libraries: allowedLibraries
         )
 
-        if !baseIsComplete {
+        if let issue = baseCheck.issue {
+            await progress(0.08, "正在修复官方基础版本：\(issue.repairDetail)")
             try await installBaseVersion(
                 version: version,
                 metadata: metadata,
@@ -128,29 +193,74 @@ actor MinecraftInstaller {
         instance: LauncherInstance,
         version: MinecraftVersion
     ) -> Bool {
-        guard let metadataData = try? Data(contentsOf: fileSystem.versionJSON(version.id)),
-              let metadata = try? JSONCoding.makeDecoder().decode(VersionMetadata.self, from: metadataData) else {
-            return false
+        checkInstallation(instance: instance, version: version).isComplete
+    }
+
+    func checkInstallation(
+        instance: LauncherInstance,
+        version: MinecraftVersion
+    ) -> InstallationCheckResult {
+        let metadataURL = fileSystem.versionJSON(version.id)
+        guard FileManager.default.fileExists(atPath: metadataURL.path) else {
+            return .incomplete(.missingFile("版本元数据", metadataURL.path))
         }
+        let metadataData: Data
+        do {
+            metadataData = try Data(contentsOf: metadataURL)
+        } catch {
+            return .incomplete(.unreadableFile("版本元数据", error.localizedDescription))
+        }
+
+        let metadata: VersionMetadata
+        do {
+            metadata = try JSONCoding.makeDecoder().decode(VersionMetadata.self, from: metadataData)
+        } catch {
+            return .incomplete(.invalidJSON("版本元数据", error.localizedDescription))
+        }
+
         let allowedLibraries = metadata.libraries.filter { RuleEvaluator().allows($0.rules) }
-        guard (try? baseInstallationIsComplete(
+        let baseCheck = checkBaseInstallation(
             version: version,
             metadata: metadata,
             libraries: allowedLibraries
-        )) == true,
-        let markerData = try? Data(contentsOf: fileSystem.installationMarker(instance.id)),
-        let marker = try? JSONCoding.makeDecoder().decode(InstallationMarker.self, from: markerData),
-        marker.versionID == instance.versionID,
-        marker.loader == instance.loader,
-        marker.loaderVersion == instance.loaderVersion,
-        nativesInstallationIsComplete(
+        )
+        guard baseCheck.isComplete else { return baseCheck }
+
+        let markerURL = fileSystem.installationMarker(instance.id)
+        guard FileManager.default.fileExists(atPath: markerURL.path) else {
+            return .incomplete(.missingFile("实例安装标记", markerURL.path))
+        }
+        let markerData: Data
+        do {
+            markerData = try Data(contentsOf: markerURL)
+        } catch {
+            return .incomplete(.unreadableFile("实例安装标记", error.localizedDescription))
+        }
+
+        let marker: InstallationMarker
+        do {
+            marker = try JSONCoding.makeDecoder().decode(InstallationMarker.self, from: markerData)
+        } catch {
+            return .incomplete(.invalidJSON("实例安装标记", error.localizedDescription))
+        }
+
+        guard marker.versionID == instance.versionID else {
+            return .incomplete(.mismatch("实例安装标记指向 \(marker.versionID)，不是 \(instance.versionID)"))
+        }
+        guard marker.loader == instance.loader,
+              marker.loaderVersion == instance.loaderVersion else {
+            return .incomplete(.mismatch("实例安装标记中的加载器配置已过期"))
+        }
+        guard nativesInstallationIsComplete(
             libraries: allowedLibraries,
             directory: fileSystem.nativesDirectory(instance.id)
-        ),
-        loaderInstallationIsComplete(instance) else {
-            return false
+        ) else {
+            return .incomplete(.incomplete("原生库尚未解压完成"))
         }
-        return true
+        guard loaderInstallationIsComplete(instance) else {
+            return .incomplete(.incomplete("加载器安装不完整或配置损坏"))
+        }
+        return .complete
     }
 
     private func loadMetadata(for version: MinecraftVersion) async throws -> VersionMetadata {
@@ -240,51 +350,102 @@ actor MinecraftInstaller {
             .write(to: fileSystem.baseInstallationMarker(version.id), options: [.atomic])
     }
 
-    private func baseInstallationIsComplete(
+    private func checkBaseInstallation(
         version: MinecraftVersion,
         metadata: VersionMetadata,
         libraries: [MinecraftLibrary]
-    ) throws -> Bool {
-        guard let markerData = try? Data(contentsOf: fileSystem.baseInstallationMarker(version.id)),
-              let marker = try? JSONCoding.makeDecoder().decode(BaseInstallationMarker.self, from: markerData),
-              marker.formatVersion == 1,
-              marker.versionID == version.id,
-              marker.manifestMetadataSHA1 == version.sha1,
-              let metadataFileSHA1 = try? Hashing.sha1(fileAt: fileSystem.versionJSON(version.id)),
-              metadataFileSHA1 == marker.localMetadataSHA1,
-              let client = metadata.downloads?["client"],
-              fileMatches(client, at: fileSystem.versionJAR(version.id)) else {
-            return false
+    ) -> InstallationCheckResult {
+        let markerURL = fileSystem.baseInstallationMarker(version.id)
+        guard FileManager.default.fileExists(atPath: markerURL.path) else {
+            return .incomplete(.missingFile("基础安装标记", markerURL.path))
+        }
+        let markerData: Data
+        do {
+            markerData = try Data(contentsOf: markerURL)
+        } catch {
+            return .incomplete(.unreadableFile("基础安装标记", error.localizedDescription))
+        }
+
+        let marker: BaseInstallationMarker
+        do {
+            marker = try JSONCoding.makeDecoder().decode(BaseInstallationMarker.self, from: markerData)
+        } catch {
+            return .incomplete(.invalidJSON("基础安装标记", error.localizedDescription))
+        }
+
+        guard marker.formatVersion == 1 else {
+            return .incomplete(.mismatch("基础安装标记格式不兼容"))
+        }
+        guard marker.versionID == version.id else {
+            return .incomplete(.mismatch("基础安装标记指向 \(marker.versionID)，不是 \(version.id)"))
+        }
+        guard marker.manifestMetadataSHA1 == version.sha1 else {
+            return .incomplete(.mismatch("基础安装标记与版本清单不匹配"))
+        }
+
+        let metadataURL = fileSystem.versionJSON(version.id)
+        let metadataFileSHA1: String
+        do {
+            metadataFileSHA1 = try Hashing.sha1(fileAt: metadataURL)
+        } catch {
+            return .incomplete(.checksumUnreadable("版本元数据", error.localizedDescription))
+        }
+        guard metadataFileSHA1 == marker.localMetadataSHA1 else {
+            return .incomplete(.checksumMismatch("版本元数据", metadataURL.path))
+        }
+
+        guard let client = metadata.downloads?["client"] else {
+            return .incomplete(.missingDownload("client"))
+        }
+        if let issue = fileMatchIssue(client, at: fileSystem.versionJAR(version.id), name: "游戏核心 Jar") {
+            return .incomplete(issue)
         }
 
         for library in libraries {
             guard let artifact = library.downloads?.artifact else { continue }
             let relativePath = artifact.path ?? MavenCoordinate.path(for: library.name)
-            guard fileHasSize(artifact.size, at: fileSystem.librariesRoot.appendingPathComponent(relativePath)) else {
-                return false
+            let url = fileSystem.librariesRoot.appendingPathComponent(relativePath)
+            guard fileHasSize(artifact.size, at: url) else {
+                return .incomplete(.sizeMismatch("依赖库 \(library.name)", url.path))
             }
         }
 
         if let reference = metadata.assetIndex {
             let indexURL = assetIndexURL(reference.id)
-            guard fileMatches(
+            if let issue = fileMatchIssue(
                 DownloadArtifact(sha1: reference.sha1, size: reference.size, url: reference.url, path: nil),
-                at: indexURL
-            ),
-            let indexData = try? Data(contentsOf: indexURL),
-            let index = try? JSONCoding.makeDecoder().decode(AssetIndex.self, from: indexData) else {
-                return false
+                at: indexURL,
+                name: "资源索引 \(reference.id)"
+            ) {
+                return .incomplete(issue)
+            }
+
+            let indexData: Data
+            do {
+                indexData = try Data(contentsOf: indexURL)
+            } catch {
+                return .incomplete(.unreadableFile("资源索引 \(reference.id)", error.localizedDescription))
+            }
+
+            let index: AssetIndex
+            do {
+                index = try JSONCoding.makeDecoder().decode(AssetIndex.self, from: indexData)
+            } catch {
+                return .incomplete(.invalidJSON("资源索引 \(reference.id)", error.localizedDescription))
             }
             for object in index.objects.values {
-                guard fileHasSize(object.size, at: assetObjectURL(hash: object.hash)) else { return false }
+                let url = assetObjectURL(hash: object.hash)
+                guard fileHasSize(object.size, at: url) else {
+                    return .incomplete(.sizeMismatch("资源对象 \(object.hash)", url.path))
+                }
             }
         }
 
         if let file = metadata.logging?["client"]?.file,
-           !fileMatches(file, at: loggingConfigurationURL(file)) {
-            return false
+           let issue = fileMatchIssue(file, at: loggingConfigurationURL(file), name: "日志配置") {
+            return .incomplete(issue)
         }
-        return true
+        return .complete
     }
 
     private func loaderInstallationIsComplete(_ instance: LauncherInstance) -> Bool {
@@ -352,12 +513,27 @@ actor MinecraftInstaller {
     }
 
     private func fileMatches(_ artifact: DownloadArtifact, at url: URL) -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        if let size = artifact.size, !fileHasSize(size, at: url) { return false }
-        if let sha1 = artifact.sha1, !sha1.isEmpty {
-            return (try? Hashing.sha1(fileAt: url)) == sha1.lowercased()
+        fileMatchIssue(artifact, at: url, name: url.lastPathComponent) == nil
+    }
+
+    private func fileMatchIssue(_ artifact: DownloadArtifact, at url: URL, name: String) -> InstallationIssue? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return .missingFile(name, url.path)
         }
-        return true
+        if let size = artifact.size, !fileHasSize(size, at: url) {
+            return .sizeMismatch(name, url.path)
+        }
+        if let sha1 = artifact.sha1, !sha1.isEmpty {
+            do {
+                let actual = try Hashing.sha1(fileAt: url)
+                if actual != sha1.lowercased() {
+                    return .checksumMismatch(name, url.path)
+                }
+            } catch {
+                return .checksumUnreadable(name, error.localizedDescription)
+            }
+        }
+        return nil
     }
 
     private func fileHasSize(_ expectedSize: Int64?, at url: URL) -> Bool {
@@ -510,10 +686,13 @@ actor MinecraftInstaller {
         while let fileURL = enumerator?.nextObject() as? URL {
             if fileURL.pathExtension == "dylib" || fileURL.pathExtension == "jnilib" || fileURL.pathExtension == "so" {
                 let targetURL = destination.appendingPathComponent(fileURL.lastPathComponent)
+                if fileURL.standardizedFileURL == targetURL.standardizedFileURL {
+                    continue
+                }
                 if FileManager.default.fileExists(atPath: targetURL.path) {
                     try? FileManager.default.removeItem(at: targetURL)
                 }
-                try? FileManager.default.moveItem(at: fileURL, to: targetURL)
+                try FileManager.default.moveItem(at: fileURL, to: targetURL)
             }
         }
 
