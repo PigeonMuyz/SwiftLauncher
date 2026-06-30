@@ -1,6 +1,11 @@
 import Foundation
 
 actor FileDownloadService {
+    enum ExistingFileValidation: Sendable {
+        case checksum
+        case sizeOnly
+    }
+
     private let http: PublicHTTPClient
 
     init(http: PublicHTTPClient = .shared) {
@@ -27,16 +32,24 @@ actor FileDownloadService {
     func download(
         from url: URL,
         to destination: URL,
+        expectedSize: Int64? = nil,
         expectedSHA1: String? = nil,
-        expectedSHA512: String? = nil
+        expectedSHA512: String? = nil,
+        existingFileValidation: ExistingFileValidation = .checksum
     ) async throws {
         if FileManager.default.fileExists(atPath: destination.path) {
-            let sha1Matches = expectedSHA1 == nil
-                || (try? Hashing.sha1(fileAt: destination)) == expectedSHA1?.lowercased()
-            let sha512Matches = expectedSHA512 == nil
-                || (try? Hashing.sha512(fileAt: destination)) == expectedSHA512?.lowercased()
-            if sha1Matches && sha512Matches {
+            let sizeMatches = expectedSize == nil || fileHasSize(expectedSize, at: destination)
+            if existingFileValidation == .sizeOnly, sizeMatches {
                 return
+            }
+            if existingFileValidation == .checksum, sizeMatches {
+                let sha1Matches = expectedSHA1 == nil
+                    || (try? Hashing.sha1(fileAt: destination)) == expectedSHA1?.lowercased()
+                let sha512Matches = expectedSHA512 == nil
+                    || (try? Hashing.sha512(fileAt: destination)) == expectedSHA512?.lowercased()
+                if sha1Matches && sha512Matches {
+                    return
+                }
             }
             try? FileManager.default.removeItem(at: destination)
         }
@@ -51,5 +64,11 @@ actor FileDownloadService {
             withIntermediateDirectories: true
         )
         try data.write(to: destination, options: [.atomic])
+    }
+
+    private func fileHasSize(_ expectedSize: Int64?, at url: URL) -> Bool {
+        guard let expectedSize else { return true }
+        let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        return Int64(size ?? -1) == expectedSize
     }
 }

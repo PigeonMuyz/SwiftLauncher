@@ -161,7 +161,8 @@ actor MicrosoftAuthenticationService {
                 username: profile.name,
                 profileID: profile.id,
                 kind: .microsoft,
-                tokenExpiresAt: Date().addingTimeInterval(TimeInterval(minecraftLogin.expiresIn))
+                tokenExpiresAt: Date().addingTimeInterval(TimeInterval(minecraftLogin.expiresIn)),
+                skinURL: profile.activeSkinURL
             ),
             refreshToken: refreshToken,
             minecraftAccessToken: minecraftLogin.accessToken
@@ -440,6 +441,21 @@ private struct EntitlementsResponse: Decodable {
 private struct MinecraftProfile: Decodable {
     let id: String
     let name: String
+    let skins: [MinecraftProfileSkin]?
+
+    var activeSkinURL: URL? {
+        let skin = skins?.first { $0.state.uppercased() == "ACTIVE" } ?? skins?.first
+        guard var value = skin?.url, !value.isEmpty else { return nil }
+        if value.hasPrefix("http://") {
+            value = "https://" + value.dropFirst("http://".count)
+        }
+        return URL(string: value)
+    }
+}
+
+private struct MinecraftProfileSkin: Decodable {
+    let state: String
+    let url: String
 }
 
 private extension String {

@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 struct ShadersView: View {
     @Bindable var store: LauncherStore
     @ViewState private var isImporting = false
+    @ViewState private var remoteSearch = ""
+    @ViewState private var isShowingInstalled = false
 
     var body: some View {
         Group {
@@ -18,6 +20,25 @@ struct ShadersView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if let instance = store.selectedInstance {
+                    Button {
+                        isShowingInstalled = true
+                    } label: {
+                        Label(
+                            "已安装 \(store.shaderPacks[instance.id, default: []].count)",
+                            systemImage: "tray.full"
+                        )
+                    }
+                    Button {
+                        isImporting = true
+                    } label: {
+                        Label("导入光影", systemImage: "square.and.arrow.down")
+                    }
+                }
+            }
+        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.zip, .folder],
@@ -32,68 +53,68 @@ struct ShadersView: View {
             guard let instance = store.selectedInstance else { return }
             await store.loadManagedContent(.shaderPacks, for: instance)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { store.modInstallPlan?.kind == .shaderPacks && store.selectedInstance != nil },
+                set: { if !$0 { store.modInstallPlan = nil } }
+            )
+        ) {
+            if let instance = store.selectedInstance {
+                ModrinthDetailsSheet(store: store, instance: instance)
+            }
+        }
+        .popover(isPresented: $isShowingInstalled, arrowEdge: .top) {
+            if let instance = store.selectedInstance {
+                installedPopover(for: instance)
+            }
+        }
     }
 
     @ViewBuilder
     private func contentView(for instance: LauncherInstance) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                instanceHeader(instance)
+        ModrinthRemoteSearchPanel(
+            store: store,
+            kind: .shaderPacks,
+            instance: instance,
+            query: $remoteSearch
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("已安装光影包")
-                            .font(.title3.weight(.semibold))
-                        Spacer()
-                        Button {
-                            isImporting = true
-                        } label: {
-                            Label("导入光影包", systemImage: "square.and.arrow.down")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
+    private func installedPopover(for instance: LauncherInstance) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("已安装光影包")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    isImporting = true
+                } label: {
+                    Label("导入", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
 
-                    Text("需要安装 Optifine、Iris 或 Oculus 模组才能加载光影包。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
-
-                    if store.shaderPacks[instance.id, default: []].isEmpty {
-                        ContentUnavailableView {
-                            Label("尚未导入光影包", systemImage: "sparkles")
-                        } description: {
-                            Text("点击「导入光影包」来添加 ZIP 文件或文件夹。")
-                        }
-                        .padding(.vertical, 60)
-                    } else {
-                        LazyVStack(spacing: 8) {
-                            ForEach(store.shaderPacks[instance.id, default: []]) { file in
-                                fileRow(file: file, instance: instance, kind: .shaderPacks)
-                            }
+            let files = store.shaderPacks[instance.id, default: []]
+            if files.isEmpty {
+                ContentUnavailableView {
+                    Label("没有本地光影包", systemImage: "sparkles")
+                } description: {
+                    Text("从资源列表安装，或导入 ZIP 文件和文件夹。")
+                }
+                .frame(width: 360, height: 220)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(files) { file in
+                            fileRow(file: file, instance: instance, kind: .shaderPacks)
                         }
                     }
                 }
+                .frame(width: 420, height: 360)
             }
-            .padding(26)
         }
-    }
-
-    private func instanceHeader(_ instance: LauncherInstance) -> some View {
-        HStack(spacing: 14) {
-            InstanceIconView(store: store, instance: instance, size: 54)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(instance.name)
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(1)
-                Text("Minecraft \(instance.versionID) · \(instance.loader.title)")
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-        }
-        .padding(.bottom, 8)
+        .padding(16)
     }
 
     private func fileRow(file: ManagedContentFile, instance: LauncherInstance, kind: ManagedContentKind) -> some View {

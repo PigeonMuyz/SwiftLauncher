@@ -21,41 +21,6 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .preferredColorScheme(.dark)
         .tint(Color(red: 0.62, green: 0.76, blue: 0.36))
-        .toolbar {
-            if store.selection == .home {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        store.presentNewInstance()
-                    } label: {
-                        Label("新建游戏实例", systemImage: "plus")
-                    }
-
-                    Button {
-                        store.loadLog()
-                        openWindow(id: "logs")
-                    } label: {
-                        Label("游戏日志", systemImage: "terminal")
-                    }
-
-                    Button {
-                        store.selection = .accounts
-                    } label: {
-                        Label("账户", systemImage: "person.crop.circle")
-                    }
-
-                    Button {
-                        Task { await store.refreshEnvironment() }
-                    } label: {
-                        Label("刷新", systemImage: "arrow.clockwise")
-                    }
-                    .disabled(store.isRefreshing)
-
-                    SettingsLink {
-                        Label("设置", systemImage: "gearshape")
-                    }
-                }
-            }
-        }
         .sheet(isPresented: $store.isPresentingNewInstance) {
             NewInstanceSheet(store: store)
         }
@@ -117,8 +82,6 @@ struct ContentView: View {
     @ViewBuilder
     private var selectedDetail: some View {
         switch store.selection {
-        case .home:
-            HomeView(store: store)
         case .mods:
             ModsView(store: store)
         case .resourcePacks:
@@ -127,8 +90,6 @@ struct ContentView: View {
             ShadersView(store: store)
         case .downloads:
             DownloadsView(store: store)
-        case .accounts:
-            AccountsView(store: store)
         case .settings:
             SettingsView(store: store)
         }

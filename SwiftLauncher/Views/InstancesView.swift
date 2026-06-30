@@ -223,14 +223,12 @@ private struct InstanceDetailView: View {
                                     }
                                     .buttonStyle(.plain)
 
-                                    AsyncImage(url: mod.iconURL) { phase in
-                                        if let image = phase.image {
-                                            image.resizable().scaledToFill()
-                                        } else {
-                                            Image(systemName: "puzzlepiece.extension.fill")
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
+                                    RemoteImageIconView(
+                                        url: mod.iconURL,
+                                        systemImage: "puzzlepiece.extension.fill",
+                                        tint: .secondary,
+                                        padding: 6
+                                    )
                                     .frame(width: 30, height: 30)
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -286,7 +284,7 @@ private struct InstanceDetailView: View {
                                 await store.install(draft)
                             }
                         }
-                        .disabled(store.isBusy)
+                        .disabled(store.isWorking(on: draft))
                     }
                     Button("保存设置") {
                         Task { await store.updateInstance(draft) }
@@ -420,7 +418,7 @@ private struct InstanceDetailView: View {
         .buttonStyle(.borderedProminent)
         .tint(.green)
         .controlSize(.large)
-        .disabled(store.isBusy || store.gameProcessID != nil)
+        .disabled(store.isWorking(on: draft) || store.gameProcessID != nil)
     }
 
     @ViewBuilder

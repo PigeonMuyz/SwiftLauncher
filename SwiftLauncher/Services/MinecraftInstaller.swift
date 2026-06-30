@@ -1,5 +1,10 @@
 import Foundation
 
+private enum LocalArtifactValidation {
+    case checksum
+    case sizeOnly
+}
+
 actor MinecraftInstaller {
     typealias ProgressHandler = @MainActor @Sendable (Double, String) -> Void
 
@@ -205,11 +210,16 @@ actor MinecraftInstaller {
                     assetObjectURL(hash: object.hash)
                 )
             }
+            await progress(0.50, "正在检查本地官方资源")
+            let assetPlan = reusableDownloadPlan(objects, validation: .sizeOnly)
             try await downloadInBatches(
-                objects,
+                assetPlan.items,
                 baseProgress: 0.50,
                 span: 0.40,
                 label: "正在补全官方资源",
+                reusedCount: assetPlan.reused,
+                concurrency: 48,
+                existingFileValidation: .sizeOnly,
                 progress: progress
             )
         }
@@ -373,33 +383,87 @@ actor MinecraftInstaller {
         baseProgress: Double,
         span: Double,
         label: String,
+        reusedCount: Int = 0,
+        concurrency: Int = 16,
+        existingFileValidation: FileDownloadService.ExistingFileValidation = .checksum,
         progress: @escaping ProgressHandler
     ) async throws {
-        guard !items.isEmpty else { return }
-        let batchSize = 12
+        guard !items.isEmpty else {
+            let reusedText = reusedCount > 0 ? "，复用 \(reusedCount) 个" : ""
+            await progress(baseProgress + span, "\(label)（无需下载\(reusedText)）")
+            return
+        }
+        let maxConcurrentDownloads = max(1, min(concurrency, items.count))
         var completed = 0
+        var nextIndex = 0
 
-        for start in stride(from: 0, to: items.count, by: batchSize) {
-            let end = min(start + batchSize, items.count)
-            let batch = Array(items[start..<end])
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                for (artifact, destination) in batch {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<maxConcurrentDownloads {
+                let item = items[nextIndex]
+                nextIndex += 1
+                group.addTask { [downloader] in
+                    try await downloader.download(
+                        from: item.0.url,
+                        to: item.1,
+                        expectedSize: item.0.size,
+                        expectedSHA1: item.0.sha1,
+                        existingFileValidation: existingFileValidation
+                    )
+                }
+            }
+
+            while try await group.next() != nil {
+                completed += 1
+                let fraction = Double(completed) / Double(items.count)
+                let reusedText = reusedCount > 0 ? "，复用 \(reusedCount) 个" : ""
+                await progress(
+                    baseProgress + span * fraction,
+                    "\(label)（\(completed)/\(items.count)\(reusedText)）"
+                )
+
+                if nextIndex < items.count {
+                    let item = items[nextIndex]
+                    nextIndex += 1
                     group.addTask { [downloader] in
                         try await downloader.download(
-                            from: artifact.url,
-                            to: destination,
-                            expectedSHA1: artifact.sha1
+                            from: item.0.url,
+                            to: item.1,
+                            expectedSize: item.0.size,
+                            expectedSHA1: item.0.sha1,
+                            existingFileValidation: existingFileValidation
                         )
                     }
                 }
-                try await group.waitForAll()
             }
-            completed = end
-            let fraction = Double(completed) / Double(items.count)
-            await progress(
-                baseProgress + span * fraction,
-                "\(label)（\(completed)/\(items.count)）"
-            )
+        }
+    }
+
+    private func reusableDownloadPlan(
+        _ items: [(DownloadArtifact, URL)],
+        validation: LocalArtifactValidation
+    ) -> (items: [(DownloadArtifact, URL)], reused: Int) {
+        var missing: [(DownloadArtifact, URL)] = []
+        var reused = 0
+        for item in items {
+            if localArtifactMatches(item.0, at: item.1, validation: validation) {
+                reused += 1
+            } else {
+                missing.append(item)
+            }
+        }
+        return (missing, reused)
+    }
+
+    private func localArtifactMatches(
+        _ artifact: DownloadArtifact,
+        at url: URL,
+        validation: LocalArtifactValidation
+    ) -> Bool {
+        switch validation {
+        case .checksum:
+            fileMatches(artifact, at: url)
+        case .sizeOnly:
+            fileHasSize(artifact.size, at: url)
         }
     }
 

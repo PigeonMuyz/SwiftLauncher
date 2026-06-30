@@ -3,9 +3,24 @@ import SwiftUI
 
 struct AccountsView: View {
     @Bindable var store: LauncherStore
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Text("管理用户")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Button("关闭") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+
+            Divider()
+
             if store.accounts.isEmpty {
                 ContentUnavailableView {
                     Label("还没有游戏账户", systemImage: "person.crop.circle.badge.plus")
@@ -17,10 +32,7 @@ struct AccountsView: View {
             } else {
                 List(store.accounts, selection: $store.selectedAccountID) { account in
                     HStack(spacing: 12) {
-                        Image(systemName: account.kind == .microsoft ? "person.crop.circle.fill.badge.checkmark" : "person.crop.circle")
-                            .font(.title2)
-                            .foregroundStyle(account.kind == .microsoft ? .green : .secondary)
-                            .frame(width: 34)
+                        MinecraftAvatarView(account: account, size: 34)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(account.username)
                                 .font(.headline)

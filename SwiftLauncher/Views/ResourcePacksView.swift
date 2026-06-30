@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 struct ResourcePacksView: View {
     @Bindable var store: LauncherStore
     @ViewState private var isImporting = false
+    @ViewState private var remoteSearch = ""
+    @ViewState private var isShowingInstalled = false
 
     var body: some View {
         Group {
@@ -18,6 +20,25 @@ struct ResourcePacksView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if let instance = store.selectedInstance {
+                    Button {
+                        isShowingInstalled = true
+                    } label: {
+                        Label(
+                            "已安装 \(store.resourcePacks[instance.id, default: []].count)",
+                            systemImage: "tray.full"
+                        )
+                    }
+                    Button {
+                        isImporting = true
+                    } label: {
+                        Label("导入资源包", systemImage: "square.and.arrow.down")
+                    }
+                }
+            }
+        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.zip, .folder],
@@ -32,61 +53,68 @@ struct ResourcePacksView: View {
             guard let instance = store.selectedInstance else { return }
             await store.loadManagedContent(.resourcePacks, for: instance)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { store.modInstallPlan?.kind == .resourcePacks && store.selectedInstance != nil },
+                set: { if !$0 { store.modInstallPlan = nil } }
+            )
+        ) {
+            if let instance = store.selectedInstance {
+                ModrinthDetailsSheet(store: store, instance: instance)
+            }
+        }
+        .popover(isPresented: $isShowingInstalled, arrowEdge: .top) {
+            if let instance = store.selectedInstance {
+                installedPopover(for: instance)
+            }
+        }
     }
 
     @ViewBuilder
     private func contentView(for instance: LauncherInstance) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                instanceHeader(instance)
+        ModrinthRemoteSearchPanel(
+            store: store,
+            kind: .resourcePacks,
+            instance: instance,
+            query: $remoteSearch
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("已安装资源包")
-                            .font(.title3.weight(.semibold))
-                        Spacer()
-                        Button {
-                            isImporting = true
-                        } label: {
-                            Label("导入资源包", systemImage: "square.and.arrow.down")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
+    private func installedPopover(for instance: LauncherInstance) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("已安装资源包")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    isImporting = true
+                } label: {
+                    Label("导入", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
 
-                    if store.resourcePacks[instance.id, default: []].isEmpty {
-                        ContentUnavailableView {
-                            Label("尚未导入资源包", systemImage: "photo.stack")
-                        } description: {
-                            Text("点击「导入资源包」来添加 ZIP 文件或文件夹。")
-                        }
-                        .padding(.vertical, 60)
-                    } else {
-                        LazyVStack(spacing: 8) {
-                            ForEach(store.resourcePacks[instance.id, default: []]) { file in
-                                fileRow(file: file, instance: instance, kind: .resourcePacks)
-                            }
+            let files = store.resourcePacks[instance.id, default: []]
+            if files.isEmpty {
+                ContentUnavailableView {
+                    Label("没有本地资源包", systemImage: "photo.stack")
+                } description: {
+                    Text("从资源列表安装，或导入 ZIP 文件和文件夹。")
+                }
+                .frame(width: 360, height: 220)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(files) { file in
+                            fileRow(file: file, instance: instance, kind: .resourcePacks)
                         }
                     }
                 }
+                .frame(width: 420, height: 360)
             }
-            .padding(26)
         }
-    }
-
-    private func instanceHeader(_ instance: LauncherInstance) -> some View {
-        HStack(spacing: 14) {
-            InstanceIconView(store: store, instance: instance, size: 54)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(instance.name)
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(1)
-                Text("Minecraft \(instance.versionID)")
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-        }
-        .padding(.bottom, 8)
+        .padding(16)
     }
 
     private func fileRow(file: ManagedContentFile, instance: LauncherInstance, kind: ManagedContentKind) -> some View {

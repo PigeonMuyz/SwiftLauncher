@@ -13,6 +13,7 @@ actor LauncherFileSystem {
     nonisolated let runtimesRoot: URL
     nonisolated let baseInstallationsRoot: URL
     nonisolated let minecraftIconsRoot: URL
+    nonisolated let avatarCacheRoot: URL
     nonisolated let logsRoot: URL
 
     init(root: URL? = nil) {
@@ -31,13 +32,14 @@ actor LauncherFileSystem {
         self.runtimesRoot = base.appendingPathComponent("runtimes", isDirectory: true)
         self.baseInstallationsRoot = minecraftRoot.appendingPathComponent("base-installations", isDirectory: true)
         self.minecraftIconsRoot = minecraftRoot.appendingPathComponent("icons", isDirectory: true)
+        self.avatarCacheRoot = base.appendingPathComponent("avatar-cache", isDirectory: true)
         self.logsRoot = base.appendingPathComponent("logs", isDirectory: true)
     }
 
     func prepare() throws {
         for directory in [
             root, minecraftRoot, instancesRoot, sharedGameRoot, versionsRoot,
-            librariesRoot, assetsRoot, runtimesRoot, baseInstallationsRoot, minecraftIconsRoot, logsRoot
+            librariesRoot, assetsRoot, runtimesRoot, baseInstallationsRoot, minecraftIconsRoot, avatarCacheRoot, logsRoot
         ] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }

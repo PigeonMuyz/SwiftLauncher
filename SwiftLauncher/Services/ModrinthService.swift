@@ -7,13 +7,15 @@ struct ModrinthSearchResult: Decodable, Identifiable, Hashable, Sendable {
     let description: String
     let author: String
     let downloads: Int
+    let follows: Int
+    let categories: [String]
     let iconURL: URL?
 
     var id: String { projectID }
 
     private enum CodingKeys: String, CodingKey {
         case projectID = "project_id"
-        case slug, title, description, author, downloads
+        case slug, title, description, author, downloads, follows, categories
         case iconURL = "icon_url"
     }
 
@@ -25,6 +27,8 @@ struct ModrinthSearchResult: Decodable, Identifiable, Hashable, Sendable {
         description = try container.decode(String.self, forKey: .description)
         author = try container.decode(String.self, forKey: .author)
         downloads = try container.decode(Int.self, forKey: .downloads)
+        follows = try container.decodeIfPresent(Int.self, forKey: .follows) ?? 0
+        categories = try container.decodeIfPresent([String].self, forKey: .categories) ?? []
         iconURL = try container.decodeIfPresent(String.self, forKey: .iconURL)
             .flatMap(URL.init(string:))
     }
@@ -35,6 +39,7 @@ private struct ModrinthSearchEnvelope: Decodable, Sendable {
 }
 
 struct ModrinthInstallPlan: Identifiable, Sendable {
+    let kind: ModrinthContentKind
     let project: ModrinthSearchResult
     let versions: [ModrinthVersionOption]
     let selectedVersionID: String
@@ -182,10 +187,19 @@ actor ModrinthService {
         self.fileSystem = fileSystem
     }
 
-    func search(query: String, gameVersion: String, loader: ModLoader) async throws -> [ModrinthSearchResult] {
-        var facets = [["project_type:mod"], ["versions:\(gameVersion)"]]
-        if loader != .vanilla {
+    func search(
+        query: String,
+        kind: ModrinthContentKind,
+        gameVersion: String,
+        loader: ModLoader,
+        categoryGroups: [[String]] = []
+    ) async throws -> [ModrinthSearchResult] {
+        var facets = [["project_type:\(kind.modrinthProjectType)"], ["versions:\(gameVersion)"]]
+        if kind.requiresModLoader, loader != .vanilla {
             facets.append(["categories:\(loader.modrinthName)"])
+        }
+        for group in categoryGroups where !group.isEmpty {
+            facets.append(group.map { "categories:\($0)" })
         }
         var components = URLComponents(
             url: Self.apiRoot.appendingPathComponent("search"),
@@ -204,20 +218,22 @@ actor ModrinthService {
 
     func install(
         project: ModrinthSearchResult,
+        kind: ModrinthContentKind,
         specificVersionID: String? = nil,
         includeRequiredDependencies: Bool,
         for instance: LauncherInstance,
         progress: @escaping ProgressHandler
     ) async throws -> Int {
-        guard instance.loader != .vanilla else {
+        guard !kind.requiresModLoader || instance.loader != .vanilla else {
             throw LauncherError.unsupported("请先为实例安装 Fabric、Quilt、Forge 或 NeoForge")
         }
         let result = try await installProject(
             projectID: project.projectID,
+            kind: kind,
             specificVersionID: specificVersionID,
             instance: instance,
             installedProjects: [],
-            includeRequiredDependencies: includeRequiredDependencies,
+            includeRequiredDependencies: kind == .mods && includeRequiredDependencies,
             progress: progress
         )
         return result.count
@@ -225,17 +241,19 @@ actor ModrinthService {
 
     func installPlan(
         project: ModrinthSearchResult,
+        kind: ModrinthContentKind,
         selectedVersionID: String? = nil,
         for instance: LauncherInstance
     ) async throws -> ModrinthInstallPlan {
         let versions = try await compatibleVersions(
             projectID: project.projectID,
+            kind: kind,
             gameVersion: instance.versionID,
             loader: instance.loader
         )
         guard !versions.isEmpty else {
             throw LauncherError.unsupported(
-                "Modrinth 上没有适配 MC \(instance.versionID) / \(instance.loader.title) 的文件"
+                "Modrinth 上没有适配 \(kind.title) / MC \(instance.versionID) 的文件"
             )
         }
         let version = if let selectedVersionID,
@@ -247,14 +265,18 @@ actor ModrinthService {
 
         var visited: Set<String> = [project.projectID]
         var dependencies: [ModrinthDependencyPlan] = []
-        try await collectRequiredDependencies(
-            of: version,
-            instance: instance,
-            depth: 0,
-            visited: &visited,
-            output: &dependencies
-        )
+        if kind == .mods {
+            try await collectRequiredDependencies(
+                of: version,
+                kind: kind,
+                instance: instance,
+                depth: 0,
+                visited: &visited,
+                output: &dependencies
+            )
+        }
         return ModrinthInstallPlan(
+            kind: kind,
             project: project,
             versions: versions.map(\.option),
             selectedVersionID: version.id,
@@ -267,6 +289,7 @@ actor ModrinthService {
 
     private func installProject(
         projectID: String,
+        kind: ModrinthContentKind,
         specificVersionID: String?,
         instance: LauncherInstance,
         installedProjects: Set<String>,
@@ -281,10 +304,11 @@ actor ModrinthService {
         } else {
             guard let compatible = try await compatibleVersions(
                 projectID: projectID,
+                kind: kind,
                 gameVersion: instance.versionID,
                 loader: instance.loader
             ).first else {
-                throw LauncherError.unsupported("Modrinth 上没有适配 MC \(instance.versionID) / \(instance.loader.title) 的文件")
+                throw LauncherError.unsupported("Modrinth 上没有适配 \(kind.title) / MC \(instance.versionID) 的文件")
             }
             version = compatible
         }
@@ -302,6 +326,7 @@ actor ModrinthService {
             }
             let dependencyResult = try await installProject(
                 projectID: dependencyProject,
+                kind: kind,
                 specificVersionID: dependency.versionID,
                 instance: instance,
                 installedProjects: installedProjects,
@@ -315,11 +340,11 @@ actor ModrinthService {
         guard let file = version.primaryFile else {
             throw LauncherError.missingDownload(version.name)
         }
-        let modsDirectory = fileSystem.gameDirectory(instance).appendingPathComponent("mods", isDirectory: true)
-        try FileManager.default.createDirectory(at: modsDirectory, withIntermediateDirectories: true)
-        let destination = modsDirectory.appendingPathComponent(URL(fileURLWithPath: file.filename).lastPathComponent)
-        let temporaryDestination = modsDirectory
-            .appendingPathComponent(".swiftlauncher-download-\(UUID().uuidString).jar")
+        let contentDirectory = contentDirectory(for: kind, instance: instance)
+        try FileManager.default.createDirectory(at: contentDirectory, withIntermediateDirectories: true)
+        let destination = contentDirectory.appendingPathComponent(URL(fileURLWithPath: file.filename).lastPathComponent)
+        let temporaryDestination = contentDirectory
+            .appendingPathComponent(".swiftlauncher-download-\(UUID().uuidString).\(fileExtension(for: kind))")
         await progress(
             min(0.15 + Double(installedProjects.count) * 0.12, 0.9),
             "正在安装 \(version.name) \(version.versionNumber)"
@@ -330,27 +355,32 @@ actor ModrinthService {
             expectedSHA1: file.hashes["sha1"],
             expectedSHA512: file.hashes["sha512"]
         )
-        try await removeInstalledVersions(
-            of: projectID,
-            in: modsDirectory,
-            excluding: temporaryDestination
-        )
+        if kind == .mods {
+            try await removeInstalledVersions(
+                of: projectID,
+                in: contentDirectory,
+                excluding: temporaryDestination
+            )
+        }
         if FileManager.default.fileExists(atPath: destination.path) {
             try FileManager.default.removeItem(at: destination)
         }
         try FileManager.default.moveItem(at: temporaryDestination, to: destination)
-        try recordInstalledMod(
-            fileName: destination.lastPathComponent,
-            project: project,
-            version: version,
-            in: modsDirectory
-        )
+        if kind == .mods {
+            try recordInstalledMod(
+                fileName: destination.lastPathComponent,
+                project: project,
+                version: version,
+                in: contentDirectory
+            )
+        }
         installedCount += 1
         return (installedCount, installedProjects)
     }
 
     private func collectRequiredDependencies(
         of version: ModrinthVersion,
+        kind: ModrinthContentKind,
         instance: LauncherInstance,
         depth: Int,
         visited: inout Set<String>,
@@ -363,6 +393,7 @@ actor ModrinthService {
             } else if let projectID = dependency.projectID,
                       let compatible = try await compatibleVersions(
                         projectID: projectID,
+                        kind: kind,
                         gameVersion: instance.versionID,
                         loader: instance.loader
                       ).first {
@@ -388,6 +419,7 @@ actor ModrinthService {
             )
             try await collectRequiredDependencies(
                 of: dependencyVersion,
+                kind: kind,
                 instance: instance,
                 depth: depth + 1,
                 visited: &visited,
@@ -460,6 +492,7 @@ actor ModrinthService {
 
     private func compatibleVersions(
         projectID: String,
+        kind: ModrinthContentKind,
         gameVersion: String,
         loader: ModLoader
     ) async throws -> [ModrinthVersion] {
@@ -470,11 +503,14 @@ actor ModrinthService {
                 .appendingPathComponent("version"),
             resolvingAgainstBaseURL: false
         )!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "game_versions", value: try jsonString([gameVersion])),
-            URLQueryItem(name: "loaders", value: try jsonString([loader.modrinthName])),
             URLQueryItem(name: "include_changelog", value: "false")
         ]
+        if kind.requiresModLoader {
+            queryItems.append(URLQueryItem(name: "loaders", value: try jsonString([loader.modrinthName])))
+        }
+        components.queryItems = queryItems
         guard let url = components.url else { throw LauncherError.invalidResponse }
         let data = try await http.data(from: url, headers: Self.headers)
         return try JSONCoding.makeDecoder().decode([ModrinthVersion].self, from: data)
@@ -502,6 +538,25 @@ actor ModrinthService {
             throw LauncherError.invalidResponse
         }
         return string
+    }
+
+    private func contentDirectory(for kind: ModrinthContentKind, instance: LauncherInstance) -> URL {
+        let gameDirectory = fileSystem.gameDirectory(instance)
+        switch kind {
+        case .mods:
+            return gameDirectory.appendingPathComponent("mods", isDirectory: true)
+        case .resourcePacks:
+            return gameDirectory.appendingPathComponent("resourcepacks", isDirectory: true)
+        case .shaderPacks:
+            return gameDirectory.appendingPathComponent("shaderpacks", isDirectory: true)
+        }
+    }
+
+    private func fileExtension(for kind: ModrinthContentKind) -> String {
+        switch kind {
+        case .mods: "jar"
+        case .resourcePacks, .shaderPacks: "zip"
+        }
     }
 }
 

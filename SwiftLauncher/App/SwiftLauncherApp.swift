@@ -38,7 +38,7 @@ struct SwiftLauncherApp: App {
                     Task { await store.launchSelectedInstance() }
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(store.selectedInstance == nil || store.isBusy)
+                .disabled(store.selectedInstance.map { store.isWorking(on: $0) } ?? true)
             }
         }
 

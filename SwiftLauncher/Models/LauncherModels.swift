@@ -182,19 +182,38 @@ struct PlayerAccount: Codable, Identifiable, Hashable, Sendable {
     var profileID: String
     var kind: AccountKind
     var tokenExpiresAt: Date?
+    var skinURL: URL?
 
     init(
         id: UUID = UUID(),
         username: String,
         profileID: String,
         kind: AccountKind,
-        tokenExpiresAt: Date? = nil
+        tokenExpiresAt: Date? = nil,
+        skinURL: URL? = nil
     ) {
         self.id = id
         self.username = username
         self.profileID = profileID
         self.kind = kind
         self.tokenExpiresAt = tokenExpiresAt
+        self.skinURL = skinURL
+    }
+
+    var offlineSkinName: String {
+        Self.offlineSkinName(for: profileID)
+    }
+
+    private static func offlineSkinName(for profileID: String) -> String {
+        let names = ["alex", "ari", "efe", "kai", "makena", "noor", "steve", "sunny", "zuri"]
+        let cleanID = profileID.replacingOccurrences(of: "-", with: "")
+        guard cleanID.count >= 32 else { return "steve" }
+        let first = String(cleanID.prefix(16))
+        let second = String(cleanID.dropFirst(16).prefix(16))
+        guard let left = UInt64(first, radix: 16),
+              let right = UInt64(second, radix: 16) else { return "steve" }
+        let mixed = (left ^ right) ^ ((left ^ right) >> 32)
+        return names[Int(mixed % UInt64(names.count))]
     }
 }
 
@@ -227,28 +246,105 @@ enum DownloadState: String, Sendable {
     }
 }
 
+enum DownloadJobKind: String, CaseIterable, Identifiable, Sendable {
+    case gameInstall
+    case modpackImport
+    case minecraftFolderImport
+    case modInstall
+    case resourcePackInstall
+    case shaderPackInstall
+    case javaRuntime
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .gameInstall: "游戏安装"
+        case .modpackImport: "整合包导入"
+        case .minecraftFolderImport: ".minecraft 导入"
+        case .modInstall: "模组安装"
+        case .resourcePackInstall: "资源包安装"
+        case .shaderPackInstall: "光影包安装"
+        case .javaRuntime: "Java 运行时"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .gameInstall: "shippingbox"
+        case .modpackImport: "archivebox"
+        case .minecraftFolderImport: "folder.badge.plus"
+        case .modInstall: "puzzlepiece.extension"
+        case .resourcePackInstall: "photo.stack"
+        case .shaderPackInstall: "sparkles"
+        case .javaRuntime: "cup.and.saucer"
+        }
+    }
+}
+
+enum DownloadJobPhase: String, Sendable {
+    case preparing
+    case resolving
+    case importing
+    case downloading
+    case installing
+    case verifying
+    case finalizing
+
+    var title: String {
+        switch self {
+        case .preparing: "准备"
+        case .resolving: "解析"
+        case .importing: "导入"
+        case .downloading: "下载"
+        case .installing: "安装"
+        case .verifying: "校验"
+        case .finalizing: "收尾"
+        }
+    }
+}
+
 struct DownloadTaskInfo: Identifiable, Sendable {
     let id: UUID
+    var kind: DownloadJobKind
+    var phase: DownloadJobPhase
+    var instanceID: UUID?
     var title: String
     var detail: String
     var progress: Double
     var state: DownloadState
     var errorMessage: String?
+    var createdAt: Date
+    var updatedAt: Date
 
     init(
         id: UUID = UUID(),
+        kind: DownloadJobKind = .gameInstall,
+        phase: DownloadJobPhase = .preparing,
+        instanceID: UUID? = nil,
         title: String,
         detail: String = "",
         progress: Double = 0,
         state: DownloadState = .queued,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
     ) {
         self.id = id
+        self.kind = kind
+        self.phase = phase
+        self.instanceID = instanceID
         self.title = title
         self.detail = detail
         self.progress = progress
         self.state = state
         self.errorMessage = errorMessage
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    var isActive: Bool {
+        state == .queued || state == .downloading
     }
 }
 
@@ -330,6 +426,66 @@ enum ManagedContentKind: String, CaseIterable, Identifiable, Sendable {
         case .resourcePacks: "资源包"
         case .shaderPacks: "光影包"
         }
+    }
+}
+
+enum ModrinthContentKind: String, CaseIterable, Identifiable, Sendable {
+    case mods
+    case resourcePacks
+    case shaderPacks
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .mods: "模组"
+        case .resourcePacks: "资源包"
+        case .shaderPacks: "光影"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .mods: "按实例的 Minecraft 版本和加载器过滤，并可自动补全必需前置。"
+        case .resourcePacks: "按 Minecraft 版本过滤，安装到所选实例的资源包目录。"
+        case .shaderPacks: "按 Minecraft 版本过滤，安装到所选实例的光影包目录。"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .mods: "puzzlepiece.extension"
+        case .resourcePacks: "photo.stack"
+        case .shaderPacks: "sparkles"
+        }
+    }
+
+    var modrinthProjectType: String {
+        switch self {
+        case .mods: "mod"
+        case .resourcePacks: "resourcepack"
+        case .shaderPacks: "shader"
+        }
+    }
+
+    var downloadJobKind: DownloadJobKind {
+        switch self {
+        case .mods: .modInstall
+        case .resourcePacks: .resourcePackInstall
+        case .shaderPacks: .shaderPackInstall
+        }
+    }
+
+    var managedContentKind: ManagedContentKind? {
+        switch self {
+        case .mods: nil
+        case .resourcePacks: .resourcePacks
+        case .shaderPacks: .shaderPacks
+        }
+    }
+
+    var requiresModLoader: Bool {
+        self == .mods
     }
 }
 

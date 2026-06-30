@@ -2,13 +2,16 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+private let sidebarPickerAnimation = Animation.easeInOut(duration: 0.18)
+
 struct SidebarBottomPanel: View {
     let store: LauncherStore
     let width: CGFloat
     let displayTemplate: String
     @Binding var isShowingInstancePicker: Bool
     @Binding var isShowingAccountPicker: Bool
-    @Binding var showingInstanceSettings: Bool
+    @Binding var showingAccountManagement: Bool
+    @Binding var showingInstanceManagement: Bool
 
     var body: some View {
         VStack(spacing: 8) {
@@ -17,7 +20,8 @@ struct SidebarBottomPanel: View {
                 width: width,
                 displayTemplate: displayTemplate,
                 isShowingInstancePicker: $isShowingInstancePicker,
-                showingInstanceSettings: $showingInstanceSettings
+                isShowingAccountPicker: $isShowingAccountPicker,
+                showingInstanceManagement: $showingInstanceManagement
             )
 
             if isShowingInstancePicker {
@@ -25,24 +29,29 @@ struct SidebarBottomPanel: View {
                     store: store,
                     isPresented: $isShowingInstancePicker,
                     width: width,
-                    displayTemplate: displayTemplate
+                    displayTemplate: displayTemplate,
+                    showingInstanceManagement: $showingInstanceManagement
                 )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.opacity)
+                .clipped()
             }
 
             AccountSwitchCard(
                 store: store,
                 width: width,
-                isShowingAccountPicker: $isShowingAccountPicker
+                isShowingAccountPicker: $isShowingAccountPicker,
+                isShowingInstancePicker: $isShowingInstancePicker
             )
 
             if isShowingAccountPicker {
                 AccountPickerList(
                     store: store,
                     isPresented: $isShowingAccountPicker,
-                    width: width
+                    width: width,
+                    showingAccountManagement: $showingAccountManagement
                 )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(.opacity)
+                .clipped()
             }
 
             LaunchGameCard(store: store, width: width)
@@ -57,66 +66,51 @@ private struct InstanceSwitchCard: View {
     let width: CGFloat
     let displayTemplate: String
     @Binding var isShowingInstancePicker: Bool
-    @Binding var showingInstanceSettings: Bool
+    @Binding var isShowingAccountPicker: Bool
+    @Binding var showingInstanceManagement: Bool
 
     var body: some View {
-        HStack(spacing: 0) {
-            Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    isShowingInstancePicker.toggle()
+        Button {
+            withAnimation(sidebarPickerAnimation) {
+                let shouldOpen = !isShowingInstancePicker
+                isShowingInstancePicker = shouldOpen
+                if shouldOpen {
+                    isShowingAccountPicker = false
                 }
-            } label: {
-                HStack(spacing: 10) {
-                    if let instance = store.selectedInstance {
-                        InstanceIconView(store: store, instance: instance, size: 32)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(instance.name)
-                                .font(.subheadline.weight(.medium))
-                                .lineLimit(1)
-                            Text(versionLine(for: instance))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    } else {
-                        Image(systemName: "shippingbox")
-                            .font(.title3)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                if let instance = store.selectedInstance {
+                    InstanceIconView(store: store, instance: instance, size: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(instance.name)
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Text(versionLine(for: instance))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("选择实例")
-                                .font(.subheadline.weight(.medium))
-                            Text("新建或导入游戏")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                            .lineLimit(1)
                     }
-                    Spacer()
-                    Image(systemName: isShowingInstancePicker ? "chevron.down" : "chevron.up")
-                        .font(.caption)
+                } else {
+                    Image(systemName: "shippingbox")
+                        .font(.title3)
                         .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("选择实例")
+                            .font(.subheadline.weight(.medium))
+                        Text("新建或导入游戏")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .padding(.leading, 14)
-                .padding(.trailing, store.selectedInstance == nil ? 14 : 8)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
+                Spacer()
+                PickerChevron(isExpanded: isShowingInstancePicker)
             }
-            .buttonStyle(.plain)
-
-            if store.selectedInstance != nil {
-                Button {
-                    showingInstanceSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 10)
-                .help("实例设置")
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .frame(width: width)
         .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
     }
@@ -136,52 +130,52 @@ private struct AccountSwitchCard: View {
     let store: LauncherStore
     let width: CGFloat
     @Binding var isShowingAccountPicker: Bool
+    @Binding var isShowingInstancePicker: Bool
 
     var body: some View {
-        HStack(spacing: 0) {
-            Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    isShowingAccountPicker.toggle()
+        Button {
+            withAnimation(sidebarPickerAnimation) {
+                let shouldOpen = !isShowingAccountPicker
+                isShowingAccountPicker = shouldOpen
+                if shouldOpen {
+                    isShowingInstancePicker = false
                 }
-            } label: {
-                HStack(spacing: 10) {
-                    AccountAvatarPlaceholder(account: store.selectedAccount, size: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(store.selectedAccount?.username ?? "选择账户")
-                            .font(.subheadline.weight(.medium))
-                            .lineLimit(1)
-                        Text(store.selectedAccount?.kind.title ?? "登录或添加本地账户")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    Image(systemName: isShowingAccountPicker ? "chevron.down" : "chevron.up")
+            }
+        } label: {
+            HStack(spacing: 10) {
+                MinecraftAvatarView(account: store.selectedAccount, size: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.selectedAccount?.username ?? "选择账户")
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    Text(store.selectedAccount?.kind.title ?? "登录或添加本地账户")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 8)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
+                        .lineLimit(1)
             }
-            .buttonStyle(.plain)
-
-            Button {
-                store.selection = .accounts
-            } label: {
-                Image(systemName: "person.crop.circle")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 10)
-            .help("账户管理")
+            Spacer()
+            PickerChevron(isExpanded: isShowingAccountPicker)
         }
-        .frame(width: width)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(width: width)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct PickerChevron: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Image(systemName: "chevron.up")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(width: 14, height: 14)
+            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            .animation(sidebarPickerAnimation, value: isExpanded)
     }
 }
 
@@ -194,13 +188,13 @@ private struct LaunchGameCard: View {
             performAction()
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: state.systemImage)
+                Image(systemName: "play.fill")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
-                    .background(state.tint, in: RoundedRectangle(cornerRadius: 9))
+                    .background(state.isDisabled ? Color.secondary : Color.green, in: RoundedRectangle(cornerRadius: 9))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(state.title)
+                    Text("开始游戏")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     Text(state.subtitle)
@@ -219,7 +213,11 @@ private struct LaunchGameCard: View {
         .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
-                .stroke(state.tint.opacity(state.isDisabled ? 0.15 : 0.35), lineWidth: 1)
+                .stroke(
+                    (state.isDisabled ? Color.secondary : Color.green)
+                        .opacity(state.isDisabled ? 0.15 : 0.35),
+                    lineWidth: 1
+                )
         }
         .disabled(state.isDisabled)
         .opacity(state.isDisabled ? 0.55 : 1)
@@ -227,35 +225,26 @@ private struct LaunchGameCard: View {
 
     private var state: LaunchCardState {
         guard let instance = store.selectedInstance else {
-            return .missingInstance
-        }
-        if store.runningInstanceID == instance.id {
-            return .running(instance)
+            return .disabled("先选择游戏实例")
         }
         if store.gameProcessID != nil {
-            return .runningOther
+            return .disabled("游戏正在运行")
         }
-        if store.isBusy || store.busyInstances.contains(instance.id) {
-            return .busy(instance)
+        if store.isWorking(on: instance) {
+            return .disabled("\(instance.name) 正在准备")
         }
         guard let account = store.account(for: instance) else {
-            return .missingAccount(instance)
+            return .disabled("先选择有效用户")
         }
         return .ready(instance: instance, account: account)
     }
 
     private func performAction() {
         switch state {
-        case .missingInstance:
-            store.presentNewInstance()
-        case .missingAccount:
-            store.selection = .accounts
+        case .disabled:
+            break
         case .ready:
             Task { await store.launchSelectedInstance() }
-        case .running:
-            Task { await store.terminateGame() }
-        case .busy, .runningOther:
-            break
         }
     }
 }
@@ -265,15 +254,14 @@ private struct InstancePickerList: View {
     @Binding var isPresented: Bool
     let width: CGFloat
     let displayTemplate: String
+    @Binding var showingInstanceManagement: Bool
 
     var body: some View {
         ScrollView {
             VStack(spacing: 8) {
                 ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
                     Button {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            store.selectedInstanceID = instance.id
-                        }
+                        store.selectedInstanceID = instance.id
                         dismiss()
                     } label: {
                         HStack(spacing: 10) {
@@ -308,9 +296,14 @@ private struct InstancePickerList: View {
                 instanceActionButton("导入 .minecraft...", systemImage: "folder.badge.plus", color: .orange) {
                     openMinecraftFolderImporter()
                 }
+
+                instanceActionButton("管理实例...", systemImage: "square.stack.3d.up", color: .secondary) {
+                    showingInstanceManagement = true
+                }
             }
         }
         .frame(maxHeight: 320)
+        .clipped()
     }
 
     private func instanceActionButton(
@@ -340,7 +333,7 @@ private struct InstancePickerList: View {
     }
 
     private func dismiss() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+        withAnimation(sidebarPickerAnimation) {
             isPresented = false
         }
     }
@@ -387,16 +380,17 @@ private struct AccountPickerList: View {
     let store: LauncherStore
     @Binding var isPresented: Bool
     let width: CGFloat
+    @Binding var showingAccountManagement: Bool
 
     var body: some View {
         VStack(spacing: 8) {
-            ForEach(store.accounts) { account in
+            ForEach(store.accounts.filter { $0.id != store.selectedAccountID }) { account in
                 Button {
                     store.selectedAccountID = account.id
                     dismiss()
                 } label: {
                     HStack(spacing: 10) {
-                        AccountAvatarPlaceholder(account: account, size: 32)
+                        MinecraftAvatarView(account: account, size: 32)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(account.username)
                                 .font(.subheadline.weight(.medium))
@@ -406,10 +400,6 @@ private struct AccountPickerList: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if store.selectedAccountID == account.id {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        }
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
@@ -419,19 +409,8 @@ private struct AccountPickerList: View {
                 .buttonStyle(.plain)
             }
 
-            accountActionButton("登录 Microsoft", systemImage: "person.badge.key", color: .green) {
-                store.selection = .accounts
-                store.beginMicrosoftLogin()
-            }
-            .disabled(store.isAuthenticatingMicrosoft)
-
-            accountActionButton("添加本地账户", systemImage: "person.badge.plus", color: .blue) {
-                store.selection = .accounts
-                store.isPresentingLocalAccount = true
-            }
-
-            accountActionButton("管理账户", systemImage: "person.crop.circle", color: .secondary) {
-                store.selection = .accounts
+            accountActionButton("管理用户...", systemImage: "person.2", color: .secondary) {
+                showingAccountManagement = true
             }
         }
     }
@@ -463,107 +442,30 @@ private struct AccountPickerList: View {
     }
 
     private func dismiss() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+        withAnimation(sidebarPickerAnimation) {
             isPresented = false
         }
     }
 }
 
-private struct AccountAvatarPlaceholder: View {
-    let account: PlayerAccount?
-    let size: CGFloat
-
-    var body: some View {
-        Image(systemName: account?.kind == .microsoft ? "person.crop.circle.fill.badge.checkmark" : "person.crop.circle.fill")
-            .font(.system(size: size * 0.72))
-            .foregroundStyle(account?.kind == .microsoft ? .green : .secondary)
-            .frame(width: size, height: size)
-            .background(.quaternary.opacity(0.45))
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                    .stroke(.separator.opacity(0.55), lineWidth: 0.5)
-            }
-    }
-}
-
 private enum LaunchCardState {
-    case missingInstance
-    case missingAccount(LauncherInstance)
-    case busy(LauncherInstance)
-    case running(LauncherInstance)
-    case runningOther
+    case disabled(String)
     case ready(instance: LauncherInstance, account: PlayerAccount)
-
-    var title: String {
-        switch self {
-        case .missingInstance:
-            "创建游戏实例"
-        case .missingAccount:
-            "选择账户"
-        case .busy:
-            "正在准备"
-        case .running:
-            "停止游戏"
-        case .runningOther:
-            "游戏运行中"
-        case .ready:
-            "开始游戏"
-        }
-    }
 
     var subtitle: String {
         switch self {
-        case .missingInstance:
-            "新建或导入后开始"
-        case let .missingAccount(instance):
-            "\(instance.name) 需要账户"
-        case let .busy(instance):
-            "\(instance.name) 正在处理"
-        case let .running(instance):
-            "\(instance.name) 正在运行"
-        case .runningOther:
-            "请先停止当前游戏"
+        case let .disabled(reason):
+            reason
         case let .ready(instance, account):
             "\(instance.versionID) · \(account.username)"
         }
     }
 
-    var systemImage: String {
-        switch self {
-        case .missingInstance:
-            "plus"
-        case .missingAccount:
-            "person.crop.circle"
-        case .busy:
-            "hourglass"
-        case .running:
-            "stop.fill"
-        case .runningOther:
-            "play.slash"
-        case .ready:
-            "play.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .running:
-            .red
-        case .missingAccount:
-            .blue
-        case .missingInstance, .ready:
-            .green
-        case .busy, .runningOther:
-            .secondary
-        }
-    }
-
     var isDisabled: Bool {
         switch self {
-        case .busy, .runningOther:
+        case .disabled:
             true
-        case .missingInstance, .missingAccount, .running, .ready:
+        case .ready:
             false
         }
     }

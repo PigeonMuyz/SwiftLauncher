@@ -6,12 +6,12 @@ import SwiftUI
 @MainActor
 @Observable
 final class LauncherStore {
-    var selection: AppSection = .home
+    var selection: AppSection = .downloads
     var manifest: VersionManifest?
     var javaRuntimes: [JavaRuntime] = []
     var instances: [LauncherInstance] = []
     var accounts: [PlayerAccount] = []
-    var downloads: [DownloadTaskInfo] = []
+    let downloadManager = DownloadJobManager()
     var loaderVersions: [ModLoader: [LoaderVersionInfo]] = [:]
     var mods: [UUID: [ModFile]] = [:]
     var resourcePacks: [UUID: [ManagedContentFile]] = [:]
@@ -21,16 +21,18 @@ final class LauncherStore {
     var isSearchingMods = false
     var isLoadingModDetails = false
     var selectedDownloadInstanceID: UUID?
+    var selectedDownloadContentKind: ModrinthContentKind = .mods
     var isLoadingLoaderVersions = false
     var selectedInstanceID: UUID?
     var selectedAccountID: UUID?
     var lastRefresh: Date?
     var isRefreshing = false
-    var isBusy = false
+    var isBusy: Bool { downloadManager.hasActiveJobs }
     var busyInstances: Set<UUID> = []  // 正在操作的实例ID集合
     var isPresentingNewInstance = false
     var newInstanceSuggestedVersionID: String?
     var isPresentingLocalAccount = false
+    var isPresentingAccountManagement = false
     var microsoftDeviceCode: MicrosoftDeviceCode?
     var isAuthenticatingMicrosoft = false
     var microsoftAuthenticationStatus = "等待授权…"
@@ -100,7 +102,11 @@ final class LauncherStore {
     }
 
     var activeDownloads: [DownloadTaskInfo] {
-        downloads.filter { $0.state == .queued || $0.state == .downloading }
+        downloadManager.activeJobs
+    }
+
+    var downloads: [DownloadTaskInfo] {
+        downloadManager.jobs
     }
 
     func bootstrap() async {
@@ -117,6 +123,9 @@ final class LauncherStore {
             selectedInstanceID = recentInstance?.id ?? instances.first?.id
             selectedDownloadInstanceID = instances.first(where: { $0.loader != .vanilla })?.id
             selectedAccountID = accounts.first?.id
+            Task { [weak self] in
+                await self?.refreshMissingMicrosoftAvatarSources()
+            }
             for versionID in Set(instances.map(\.versionID)) {
                 try? await fileSystem.ensureMinecraftIcon(for: versionID)
             }
@@ -174,7 +183,7 @@ final class LauncherStore {
         )
         instances.append(instance)
         selectedInstanceID = instance.id
-        selection = .home
+        selection = .downloads
         isPresentingNewInstance = false
         newInstanceSuggestedVersionID = nil
         await persistInstances()
@@ -194,114 +203,86 @@ final class LauncherStore {
     }
 
     func importModpack(from url: URL) async {
-        guard !isBusy else { return }
-        isBusy = true
-        var importedInstance: LauncherInstance?
-        let taskID = UUID()
-        downloads.insert(
-            DownloadTaskInfo(id: taskID, title: url.deletingPathExtension().lastPathComponent, detail: "准备导入整合包"),
-            at: 0
-        )
-        do {
-            updateDownload(taskID) { $0.state = .downloading }
+        let title = url.deletingPathExtension().lastPathComponent
+        let result = await downloadManager.run(
+            kind: .modpackImport,
+            title: title,
+            detail: "准备导入整合包"
+        ) { reporter in
+            reporter.update(0.02, "正在读取整合包", phase: .importing)
             let result = try await instanceImportService.importModpack(
                 from: url,
                 accountID: selectedAccountID,
                 knownVersionIDs: Set(manifest?.versions.map(\.id) ?? [])
-            ) { [weak self] value, detail in
-                self?.updateDownload(taskID) { task in
-                    task.progress = value
-                    task.detail = detail
-                    task.state = .downloading
-                }
+            ) { value, detail in
+                reporter.update(value * 0.64, detail, phase: .importing)
             }
-            instances.append(result.instance)
-            selectedInstanceID = result.instance.id
-            if selectedDownloadInstanceID == nil, result.instance.loader != .vanilla {
-                selectedDownloadInstanceID = result.instance.id
+            await registerImportedInstance(result.instance)
+            reporter.attachToInstance(result.instance.id)
+
+            guard let version = manifest?.versions.first(where: { $0.id == result.instance.versionID }) else {
+                throw LauncherError.unsupported("整合包声明的 Minecraft 版本不在当前版本清单中")
             }
-            await persistInstances()
-            updateDownload(taskID) { task in
-                task.progress = 1
-                task.detail = result.detail
-                task.state = .completed
-            }
-            importedInstance = result.instance
-        } catch {
-            updateDownload(taskID) { task in
-                task.state = .failed
-                task.errorMessage = error.localizedDescription
-            }
-            present(error)
+            try await performInstall(result.instance, version: version, reporter: reporter, progressRange: 0.64...1)
+            reporter.update(1, result.detail, phase: .finalizing)
         }
-        isBusy = false
-        if let importedInstance {
-            // 在后台异步安装，不阻塞用户操作其他实例
-            Task {
-                await install(importedInstance)
-            }
+        if case let .failed(error) = result {
+            present(error)
         }
     }
 
     func importMinecraftFolder(from url: URL) async {
-        guard !isBusy else { return }
-        isBusy = true
-        var importedInstance: LauncherInstance?
-        let taskID = UUID()
-        downloads.insert(
-            DownloadTaskInfo(id: taskID, title: url.lastPathComponent, detail: "准备导入 .minecraft"),
-            at: 0
-        )
-        do {
-            updateDownload(taskID) { $0.state = .downloading }
+        let result = await downloadManager.run(
+            kind: .minecraftFolderImport,
+            title: url.lastPathComponent,
+            detail: "准备导入 .minecraft"
+        ) { reporter in
+            reporter.update(0.02, "正在读取 .minecraft", phase: .importing)
             let result = try await instanceImportService.importMinecraftFolder(
                 from: url,
                 accountID: selectedAccountID,
                 knownVersionIDs: Set(manifest?.versions.map(\.id) ?? [])
-            ) { [weak self] value, detail in
-                self?.updateDownload(taskID) { task in
-                    task.progress = value
-                    task.detail = detail
-                    task.state = .downloading
-                }
+            ) { value, detail in
+                reporter.update(value * 0.64, detail, phase: .importing)
             }
-            instances.append(result.instance)
-            selectedInstanceID = result.instance.id
-            if selectedDownloadInstanceID == nil, result.instance.loader != .vanilla {
-                selectedDownloadInstanceID = result.instance.id
+            await registerImportedInstance(result.instance)
+            reporter.attachToInstance(result.instance.id)
+
+            guard let version = manifest?.versions.first(where: { $0.id == result.instance.versionID }) else {
+                throw LauncherError.unsupported("导入的实例使用了当前版本清单中不存在的 Minecraft 版本")
             }
-            await persistInstances()
-            updateDownload(taskID) { task in
-                task.progress = 1
-                task.detail = result.detail
-                task.state = .completed
-            }
-            importedInstance = result.instance
-        } catch {
-            updateDownload(taskID) { task in
-                task.state = .failed
-                task.errorMessage = error.localizedDescription
-            }
-            present(error)
+            try await performInstall(result.instance, version: version, reporter: reporter, progressRange: 0.64...1)
+            reporter.update(1, result.detail, phase: .finalizing)
         }
-        isBusy = false
-        if let importedInstance {
-            // 在后台异步安装，不阻塞用户操作其他实例
-            Task {
-                await install(importedInstance)
-            }
+        if case let .failed(error) = result {
+            present(error)
         }
     }
 
     func searchMods(query: String, for instance: LauncherInstance) async {
+        await searchModrinthContent(.mods, query: query, for: instance)
+    }
+
+    func searchModrinthContent(
+        _ kind: ModrinthContentKind,
+        query: String,
+        categoryGroups: [[String]] = [],
+        for instance: LauncherInstance
+    ) async {
         guard !isSearchingMods else { return }
+        guard !kind.requiresModLoader || instance.loader != .vanilla else {
+            modrinthSearchResults = []
+            return
+        }
         isSearchingMods = true
         defer { isSearchingMods = false }
         do {
             modrinthSearchResults = try await modrinthService.search(
                 query: query.trimmingCharacters(in: .whitespacesAndNewlines),
+                kind: kind,
                 gameVersion: instance.versionID,
-                loader: instance.loader
+                loader: instance.loader,
+                categoryGroups: categoryGroups
             )
         } catch {
             modrinthSearchResults = []
@@ -314,12 +295,22 @@ final class LauncherStore {
         for instance: LauncherInstance,
         selectedVersionID: String? = nil
     ) async {
+        await showModrinthDetails(.mods, project, for: instance, selectedVersionID: selectedVersionID)
+    }
+
+    func showModrinthDetails(
+        _ kind: ModrinthContentKind,
+        _ project: ModrinthSearchResult,
+        for instance: LauncherInstance,
+        selectedVersionID: String? = nil
+    ) async {
         guard !isLoadingModDetails else { return }
         isLoadingModDetails = true
         defer { isLoadingModDetails = false }
         do {
             modInstallPlan = try await modrinthService.installPlan(
                 project: project,
+                kind: kind,
                 selectedVersionID: selectedVersionID,
                 for: instance
             )
@@ -329,6 +320,20 @@ final class LauncherStore {
     }
 
     func installMod(
+        _ project: ModrinthSearchResult,
+        for instance: LauncherInstance,
+        specificVersionID: String? = nil
+    ) async {
+        await installModrinthContent(
+            .mods,
+            project,
+            for: instance,
+            specificVersionID: specificVersionID
+        )
+    }
+
+    func installModrinthContent(
+        _ kind: ModrinthContentKind,
         _ project: ModrinthSearchResult,
         for instance: LauncherInstance,
         specificVersionID: String? = nil
@@ -345,39 +350,44 @@ final class LauncherStore {
         ) as? Bool ?? true
         let includeRequiredDependencies = mode == .beginner
             || (mode == .normal && normalAutoDependencies)
-        let taskID = UUID()
-        downloads.insert(
-            DownloadTaskInfo(id: taskID, title: project.title, detail: "准备从 Modrinth 安装到 \(instance.name)"),
-            at: 0
-        )
-        do {
-            updateDownload(taskID) { $0.state = .downloading }
+
+        let result = await downloadManager.run(
+            kind: kind.downloadJobKind,
+            title: project.title,
+            detail: "准备从 Modrinth 安装\(kind.title)到 \(instance.name)",
+            instanceID: instance.id
+        ) { reporter in
             let count = try await modrinthService.install(
                 project: project,
+                kind: kind,
                 specificVersionID: specificVersionID,
                 includeRequiredDependencies: includeRequiredDependencies,
                 for: instance
-            ) { [weak self] value, detail in
-                self?.updateDownload(taskID) { task in
-                    task.progress = value
-                    task.detail = detail
-                    task.state = .downloading
-                }
+            ) { value, detail in
+                reporter.update(value, detail, phase: .downloading)
             }
-            await loadMods(for: instance)
-            updateDownload(taskID) { task in
-                task.progress = 1
-                task.detail = includeRequiredDependencies
+            await refreshInstalledContent(kind, for: instance)
+            reporter.update(
+                1,
+                kind == .mods && includeRequiredDependencies
                     ? "已安装到 \(instance.name)，包含 \(count) 个模组/必需前置"
-                    : "已安装到 \(instance.name)，未自动安装前置模组"
-                task.state = .completed
-            }
-        } catch {
-            updateDownload(taskID) { task in
-                task.state = .failed
-                task.errorMessage = error.localizedDescription
-            }
+                    : "已安装 \(count) 个\(kind.title)到 \(instance.name)",
+                phase: .finalizing
+            )
+        }
+        if case let .failed(error) = result {
             present(error)
+        }
+    }
+
+    private func refreshInstalledContent(_ kind: ModrinthContentKind, for instance: LauncherInstance) async {
+        switch kind {
+        case .mods:
+            await loadMods(for: instance)
+        case .resourcePacks:
+            await loadManagedContent(.resourcePacks, for: instance)
+        case .shaderPacks:
+            await loadManagedContent(.shaderPacks, for: instance)
         }
     }
 
@@ -475,48 +485,61 @@ final class LauncherStore {
         }
     }
 
+    private func registerImportedInstance(_ instance: LauncherInstance) async {
+        instances.removeAll { $0.id == instance.id }
+        instances.append(instance)
+        selectedInstanceID = instance.id
+        if selectedDownloadInstanceID == nil, instance.loader != .vanilla {
+            selectedDownloadInstanceID = instance.id
+        }
+        await persistInstances()
+    }
+
+    private func performInstall(
+        _ instance: LauncherInstance,
+        version: MinecraftVersion,
+        reporter: DownloadJobReporter,
+        progressRange: ClosedRange<Double> = 0...1
+    ) async throws {
+        func scale(_ value: Double) -> Double {
+            progressRange.lowerBound + (progressRange.upperBound - progressRange.lowerBound) * value
+        }
+
+        try await installer.install(instance: instance, version: version) { value, detail in
+            reporter.update(
+                scale(value),
+                detail,
+                phase: value < 0.9 ? .downloading : .verifying
+            )
+        }
+        javaRuntimes = await javaService.discover(
+            additionalPaths: instances.filter { !$0.usesAutomaticJava }.compactMap(\.javaPath)
+        )
+        try? await fileSystem.ensureMinecraftIcon(for: instance.versionID)
+        iconRevision += 1
+        selection = .downloads
+        reporter.update(progressRange.upperBound, "安装完成，SHA-1 校验通过", phase: .finalizing)
+    }
+
     func install(_ instance: LauncherInstance) async {
         guard let version = manifest?.versions.first(where: { $0.id == instance.versionID }) else { return }
 
         // 只检查当前实例是否忙碌
-        guard !busyInstances.contains(instance.id) else { return }
+        guard !busyInstances.contains(instance.id),
+              !downloadManager.hasActiveJob(for: instance.id) else { return }
 
         busyInstances.insert(instance.id)
         defer { busyInstances.remove(instance.id) }
 
-        let taskID = UUID()
-        downloads.insert(
-            DownloadTaskInfo(id: taskID, title: instance.name, detail: "准备安装 \(instance.versionID)"),
-            at: 0
-        )
-
-        do {
-            updateDownload(taskID) { task in task.state = .downloading }
-            try await installer.install(instance: instance, version: version) { [weak self] value, detail in
-                self?.updateDownload(taskID) { task in
-                    task.progress = value
-                    task.detail = detail
-                    task.state = value >= 1 ? .completed : .downloading
-                }
-            }
-            updateDownload(taskID) { task in
-                task.progress = 1
-                task.detail = "安装完成，SHA-1 校验通过"
-                task.state = .completed
-            }
-            javaRuntimes = await javaService.discover(
-                additionalPaths: instances.filter { !$0.usesAutomaticJava }.compactMap(\.javaPath)
-            )
-            try? await fileSystem.ensureMinecraftIcon(for: instance.versionID)
-            iconRevision += 1
-            selection = .home
-        } catch is CancellationError {
-            updateDownload(taskID) { $0.state = .cancelled }
-        } catch {
-            updateDownload(taskID) { task in
-                task.state = .failed
-                task.errorMessage = error.localizedDescription
-            }
+        let result = await downloadManager.run(
+            kind: .gameInstall,
+            title: instance.name,
+            detail: "准备安装 \(instance.versionID)",
+            instanceID: instance.id
+        ) { reporter in
+            try await performInstall(instance, version: version, reporter: reporter)
+        }
+        if case let .failed(error) = result {
             present(error)
         }
     }
@@ -524,11 +547,11 @@ final class LauncherStore {
     func launchSelectedInstance() async {
         guard let instance = selectedInstance else { return }
 
-        // 只检查当前实例是否忙碌，而不是全局 isBusy
-        guard !busyInstances.contains(instance.id) else { return }
+        guard !busyInstances.contains(instance.id),
+              !downloadManager.hasActiveJob(for: instance.id) else { return }
 
         guard var account = account(for: instance) else {
-            selection = .accounts
+            isPresentingAccountManagement = true
             present(LauncherError.missingAccount)
             return
         }
@@ -539,7 +562,7 @@ final class LauncherStore {
             do {
                 account = try await refreshMicrosoftAccount(account)
             } catch {
-                selection = .accounts
+                isPresentingAccountManagement = true
                 present(error)
                 return
             }
@@ -547,16 +570,15 @@ final class LauncherStore {
 
         let version = manifest?.versions.first { $0.id == instance.versionID }
 
-        // 先检查 Java 是否可用，避免因缺失 Java 触发不必要的重新安装
-        guard let java = preferredRuntime(for: instance) else {
-            present(LauncherError.missingJava)
-            return
-        }
-
         if let version,
            !(await installer.installationIsComplete(instance: instance, version: version)) {
             await install(instance)
             guard await installer.installationIsComplete(instance: instance, version: version) else { return }
+        }
+
+        guard let java = preferredRuntime(for: instance) else {
+            present(LauncherError.missingJava)
+            return
         }
 
         busyInstances.insert(instance.id)
@@ -891,6 +913,10 @@ final class LauncherStore {
         runningInstanceID == instance.id && gameProcessID != nil
     }
 
+    func isWorking(on instance: LauncherInstance) -> Bool {
+        busyInstances.contains(instance.id) || downloadManager.hasActiveJob(for: instance.id)
+    }
+
     func launchButtonTitle(for instance: LauncherInstance) -> String {
         if isRunning(instance) { return "游戏运行中" }
         return isInstalled(instance) ? "启动游戏" : "安装并启动"
@@ -911,7 +937,7 @@ final class LauncherStore {
     }
 
     func clearCompletedDownloads() {
-        downloads.removeAll { $0.state == .completed || $0.state == .cancelled }
+        downloadManager.clearCompleted()
     }
 
     private func preferredRuntime(forVersionID versionID: String) -> JavaRuntime? {
@@ -968,7 +994,8 @@ final class LauncherStore {
             username: session.account.username,
             profileID: session.account.profileID,
             kind: .microsoft,
-            tokenExpiresAt: session.account.tokenExpiresAt
+            tokenExpiresAt: session.account.tokenExpiresAt,
+            skinURL: session.account.skinURL
         )
         try keychain.set(session.refreshToken, account: "microsoft-refresh-\(account.id.uuidString)")
         try keychain.set(session.minecraftAccessToken, account: "minecraft-token-\(account.id.uuidString)")
@@ -979,9 +1006,13 @@ final class LauncherStore {
         return refreshed
     }
 
-    private func updateDownload(_ id: UUID, mutation: (inout DownloadTaskInfo) -> Void) {
-        guard let index = downloads.firstIndex(where: { $0.id == id }) else { return }
-        mutation(&downloads[index])
+    private func refreshMissingMicrosoftAvatarSources() async {
+        let candidates = accounts.filter { account in
+            account.kind == .microsoft && account.skinURL == nil
+        }
+        for account in candidates {
+            _ = try? await refreshMicrosoftAccount(account)
+        }
     }
 
     private func persistInstances() async {

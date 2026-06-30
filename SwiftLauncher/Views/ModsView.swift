@@ -5,6 +5,8 @@ struct ModsView: View {
     @Bindable var store: LauncherStore
     @ViewState private var isImportingMods = false
     @ViewState private var modPendingDeletion: ModFile?
+    @ViewState private var remoteSearch = ""
+    @ViewState private var isShowingInstalled = false
 
     var body: some View {
         Group {
@@ -27,6 +29,25 @@ struct ModsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if let instance = store.selectedInstance, instance.loader != .vanilla {
+                    Button {
+                        isShowingInstalled = true
+                    } label: {
+                        Label(
+                            "已安装 \(store.mods[instance.id, default: []].count)",
+                            systemImage: "tray.full"
+                        )
+                    }
+                    Button {
+                        isImportingMods = true
+                    } label: {
+                        Label("导入 JAR", systemImage: "square.and.arrow.down")
+                    }
+                }
+            }
+        }
         .confirmationDialog(
             "移除模组「\(modPendingDeletion?.displayName ?? "")」？",
             isPresented: Binding(
@@ -53,70 +74,68 @@ struct ModsView: View {
             guard let instance = store.selectedInstance else { return }
             await store.loadMods(for: instance)
         }
+        .sheet(
+            isPresented: Binding(
+                get: { store.modInstallPlan?.kind == .mods && store.selectedInstance != nil },
+                set: { if !$0 { store.modInstallPlan = nil } }
+            )
+        ) {
+            if let instance = store.selectedInstance {
+                ModrinthDetailsSheet(store: store, instance: instance)
+            }
+        }
+        .popover(isPresented: $isShowingInstalled, arrowEdge: .top) {
+            if let instance = store.selectedInstance {
+                installedPopover(for: instance)
+            }
+        }
     }
 
     @ViewBuilder
     private func modsContent(for instance: LauncherInstance) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                instanceHeader(instance)
+        ModrinthRemoteSearchPanel(
+            store: store,
+            kind: .mods,
+            instance: instance,
+            query: $remoteSearch
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("已安装模组")
-                            .font(.title3.weight(.semibold))
-                        Spacer()
-                        Button {
-                            isImportingMods = true
-                        } label: {
-                            Label("导入模组 JAR", systemImage: "square.and.arrow.down")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
+    private func installedPopover(for instance: LauncherInstance) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("已安装模组")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    isImportingMods = true
+                } label: {
+                    Label("导入", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
 
-                    if instance.loader == .fabric {
-                        Text("Fabric Loader \(instance.loaderVersion ?? "") 已安装；Fabric API 是独立模组，可在下载页面安装。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 12)
-                            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
-                    }
-
-                    if store.mods[instance.id, default: []].isEmpty {
-                        ContentUnavailableView {
-                            Label("尚未导入模组", systemImage: "cube.box")
-                        } description: {
-                            Text("点击「导入模组 JAR」来添加本地模组文件。")
-                        }
-                        .padding(.vertical, 60)
-                    } else {
-                        LazyVStack(spacing: 8) {
-                            ForEach(store.mods[instance.id, default: []]) { mod in
-                                modRow(mod: mod, instance: instance)
-                            }
+            let mods = store.mods[instance.id, default: []]
+            if mods.isEmpty {
+                ContentUnavailableView {
+                    Label("没有本地模组", systemImage: "cube.box")
+                } description: {
+                    Text("从资源列表安装，或导入本地 JAR 文件。")
+                }
+                .frame(width: 360, height: 220)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(mods) { mod in
+                            modRow(mod: mod, instance: instance)
                         }
                     }
                 }
+                .frame(width: 460, height: 380)
             }
-            .padding(26)
         }
-    }
-
-    private func instanceHeader(_ instance: LauncherInstance) -> some View {
-        HStack(spacing: 14) {
-            InstanceIconView(store: store, instance: instance, size: 54)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(instance.name)
-                    .font(.title2.weight(.semibold))
-                    .lineLimit(1)
-                Text("Minecraft \(instance.versionID) · \(instance.loader.title)")
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-        }
-        .padding(.bottom, 8)
+        .padding(16)
     }
 
     private func modRow(mod: ModFile, instance: LauncherInstance) -> some View {
@@ -130,14 +149,12 @@ struct ModsView: View {
             }
             .buttonStyle(.plain)
 
-            AsyncImage(url: mod.iconURL) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    Image(systemName: "puzzlepiece.extension.fill")
-                        .foregroundStyle(.secondary)
-                }
-            }
+            RemoteImageIconView(
+                url: mod.iconURL,
+                systemImage: "puzzlepiece.extension.fill",
+                tint: .secondary,
+                padding: 8
+            )
             .frame(width: 40, height: 40)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
             .clipShape(RoundedRectangle(cornerRadius: 8))
