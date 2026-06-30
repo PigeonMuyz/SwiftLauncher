@@ -82,14 +82,24 @@ struct ContentView: View {
     @ViewBuilder
     private var selectedDetail: some View {
         switch store.selection {
-        case .mods:
-            ModsView(store: store)
-        case .resourcePacks:
-            ResourcePacksView(store: store)
-        case .shaders:
-            ShadersView(store: store)
-        case .downloads:
-            DownloadsView(store: store)
+        case .downloadVersions:
+            DownloadsView(store: store, section: .games)
+        case .downloadTasks:
+            DownloadsView(store: store, section: .tasks)
+        case .libraryMods:
+            ResourceLibraryView(store: store, kind: .mods)
+        case .libraryShaders:
+            ResourceLibraryView(store: store, kind: .shaders)
+        case .libraryResourcePacks:
+            ResourceLibraryView(store: store, kind: .resourcePacks)
+        case .libraryDataPacks:
+            ResourceLibraryView(store: store, kind: .dataPacks)
+        case .libraryModpacks:
+            ResourceLibraryView(store: store, kind: .modpacks)
+        case .instanceResources:
+            InstanceResourcesView(store: store)
+        case .instanceSettings:
+            CurrentInstanceSettingsView(store: store)
         case .settings:
             SettingsView(store: store)
         }

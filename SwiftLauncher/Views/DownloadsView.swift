@@ -2,74 +2,26 @@ import SwiftUI
 
 struct DownloadsView: View {
     @Bindable var store: LauncherStore
-    @State private var section: DownloadSection = .games
+    let section: DownloadSection
     @State private var versionType: VersionType = .release
     @State private var versionSearch = ""
-    @State private var selectedVersionID = ""
-    @State private var contentSearch = ""
     @State private var taskFilter: DownloadTaskFilter = .all
-    @AppStorage(LauncherExperienceMode.defaultsKey) private var experienceMode = LauncherExperienceMode.beginner.rawValue
-    @AppStorage(LauncherExperienceMode.autoDependenciesDefaultsKey) private var autoInstallRequiredMods = true
+
+    init(store: LauncherStore, section: DownloadSection) {
+        self.store = store
+        self.section = section
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("下载内容", selection: $section) {
-                ForEach(DownloadSection.allCases) { item in
-                    Label(item.title, systemImage: item.systemImage).tag(item)
-                }
+        Group {
+            switch section {
+            case .games:
+                gameDownloads
+            case .tasks:
+                taskList
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 520)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            Group {
-                switch section {
-                case .games:
-                    gameDownloads
-                case .content:
-                    contentDownloads
-                case .tasks:
-                    taskList
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear {
-            if selectedVersionID.isEmpty {
-                selectedVersionID = store.manifest?.latest.release ?? ""
-            }
-            if store.selectedDownloadInstanceID == nil {
-                store.selectedDownloadInstanceID = compatibleInstances(for: store.selectedDownloadContentKind).first?.id
-            }
-        }
-        .onChange(of: versionType) { _, _ in
-            selectedVersionID = filteredVersions.first?.id ?? ""
-        }
-        .onChange(of: store.selectedDownloadInstanceID) { _, _ in
-            store.modrinthSearchResults = []
-            store.modInstallPlan = nil
-        }
-        .onChange(of: store.selectedDownloadContentKind) { _, kind in
-            store.modrinthSearchResults = []
-            store.modInstallPlan = nil
-            if selectedDownloadInstance == nil {
-                store.selectedDownloadInstanceID = compatibleInstances(for: kind).first?.id
-            }
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { store.modInstallPlan != nil },
-                set: { if !$0 { store.modInstallPlan = nil } }
-            )
-        ) {
-            if let instance = selectedDownloadInstance {
-                ModrinthDetailsSheet(store: store, instance: instance)
-            }
-        }
     }
 
     private var gameDownloads: some View {
@@ -124,64 +76,6 @@ struct DownloadsView: View {
                 } else if filteredVersions.isEmpty {
                     ContentUnavailableView.search(text: versionSearch)
                 }
-            }
-        }
-    }
-
-    private var contentDownloads: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Picker("内容类型", selection: $store.selectedDownloadContentKind) {
-                    ForEach(ModrinthContentKind.allCases) { kind in
-                        Label(kind.title, systemImage: kind.systemImage).tag(kind)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 360)
-
-                Picker("目标实例", selection: $store.selectedDownloadInstanceID) {
-                    Text("选择目标实例").tag(UUID?.none)
-                    ForEach(compatibleInstances(for: store.selectedDownloadContentKind)) { instance in
-                        Text(instanceLabel(instance, for: store.selectedDownloadContentKind))
-                            .tag(UUID?.some(instance.id))
-                    }
-                }
-                .frame(minWidth: 300, maxWidth: 520)
-
-                if store.selectedDownloadContentKind == .mods {
-                    Label(selectedExperienceMode.title, systemImage: modeSystemImage)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    if selectedExperienceMode == .normal {
-                        Toggle("自动补全必需前置", isOn: $autoInstallRequiredMods)
-                            .toggleStyle(.checkbox)
-                    }
-                }
-                Spacer()
-            }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 16)
-
-            Divider()
-
-            if compatibleInstances(for: store.selectedDownloadContentKind).isEmpty {
-                ContentUnavailableView {
-                    Label("没有可安装\(store.selectedDownloadContentKind.title)的实例", systemImage: store.selectedDownloadContentKind.systemImage)
-                } description: {
-                    Text(store.selectedDownloadContentKind == .mods
-                         ? "请先在“游戏”中创建 Fabric、Quilt、Forge 或 NeoForge 实例。"
-                         : "请先创建或导入一个游戏实例。")
-                } actions: {
-                    Button("下载游戏实例") { section = .games }
-                }
-            } else if let instance = selectedDownloadInstance {
-                ModrinthRemoteSearchPanel(
-                    store: store,
-                    kind: store.selectedDownloadContentKind,
-                    instance: instance,
-                    query: $contentSearch
-                )
             }
         }
     }
@@ -250,14 +144,6 @@ struct DownloadsView: View {
         }
     }
 
-    private var selectedGameVersion: MinecraftVersion? {
-        store.manifest?.versions.first { $0.id == selectedVersionID }
-    }
-
-    private var selectedDownloadInstance: LauncherInstance? {
-        compatibleInstances(for: store.selectedDownloadContentKind).first { $0.id == store.selectedDownloadInstanceID }
-    }
-
     private var filteredDownloads: [DownloadTaskInfo] {
         switch taskFilter {
         case .all:
@@ -268,49 +154,6 @@ struct DownloadsView: View {
             store.downloads.filter { $0.state == .failed }
         case .completed:
             store.downloads.filter { $0.state == .completed || $0.state == .cancelled }
-        }
-    }
-
-    private var selectedExperienceMode: LauncherExperienceMode {
-        LauncherExperienceMode(rawValue: experienceMode) ?? .beginner
-    }
-
-    private var modeSystemImage: String {
-        switch selectedExperienceMode {
-        case .beginner: "wand.and.stars"
-        case .normal: "slider.horizontal.3"
-        case .expert: "info.circle"
-        }
-    }
-
-    private func compatibleInstances(for kind: ModrinthContentKind) -> [LauncherInstance] {
-        switch kind {
-        case .mods:
-            store.instances.filter { $0.loader != .vanilla }
-        case .resourcePacks, .shaderPacks:
-            store.instances
-        }
-    }
-
-    private func instanceLabel(_ instance: LauncherInstance, for kind: ModrinthContentKind) -> String {
-        switch kind {
-        case .mods:
-            "\(instance.name) · MC \(instance.versionID) · \(instance.loader.title)"
-        case .resourcePacks:
-            "\(instance.name) · MC \(instance.versionID)"
-        case .shaderPacks:
-            "\(instance.name) · MC \(instance.versionID) · \(instance.loader.title)"
-        }
-    }
-
-    private func searchContent() {
-        guard let instance = selectedDownloadInstance else { return }
-        Task {
-            await store.searchModrinthContent(
-                store.selectedDownloadContentKind,
-                query: contentSearch,
-                for: instance
-            )
         }
     }
 
@@ -376,9 +219,8 @@ struct DownloadsView: View {
     }
 }
 
-private enum DownloadSection: String, CaseIterable, Identifiable {
+enum DownloadSection: String, CaseIterable, Identifiable {
     case games
-    case content
     case tasks
 
     var id: Self { self }
@@ -386,7 +228,6 @@ private enum DownloadSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .games: "游戏"
-        case .content: "内容库"
         case .tasks: "任务"
         }
     }
@@ -394,7 +235,6 @@ private enum DownloadSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .games: "shippingbox"
-        case .content: "square.grid.2x2"
         case .tasks: "list.bullet.rectangle"
         }
     }

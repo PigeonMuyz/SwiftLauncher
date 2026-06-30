@@ -81,7 +81,7 @@ private struct InstanceRow: View {
     }
 }
 
-private struct InstanceDetailView: View {
+struct InstanceDetailView: View {
     @Bindable var store: LauncherStore
     @ViewState private var draft: LauncherInstance
     @ViewState private var isConfirmingDelete = false
@@ -90,6 +90,7 @@ private struct InstanceDetailView: View {
     @ViewState private var isImportingShaderPacks = false
     @ViewState private var isSelectingIcon = false
     @ViewState private var isSelectingJava = false
+    @ViewState private var isManagingLoader = false
     @ViewState private var modPendingDeletion: ModFile?
 
     init(store: LauncherStore, instance: LauncherInstance) {
@@ -121,12 +122,16 @@ private struct InstanceDetailView: View {
                         }
                         LabeledContent("游戏版本", value: draft.versionID)
                         LabeledContent("来源", value: "Mojang 官方")
-                        LabeledContent(
-                            "加载器",
-                            value: draft.loader == .vanilla
-                                ? draft.loader.title
-                                : "\(draft.loader.title) \(draft.loaderVersion ?? "")"
-                        )
+                        LabeledContent("加载器") {
+                            HStack(spacing: 8) {
+                                Text(loaderSummary)
+                                    .foregroundStyle(.secondary)
+                                Button("安装/更换…") {
+                                    isManagingLoader = true
+                                }
+                                .disabled(store.isWorking(on: draft))
+                            }
+                        }
                         Toggle("启用版本隔离", isOn: $draft.isVersionIsolated)
                         Text(
                             draft.isVersionIsolated
@@ -368,6 +373,11 @@ private struct InstanceDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $isManagingLoader) {
+            InstanceLoaderSheet(store: store, instance: draft) { updated in
+                draft = updated
+            }
+        }
         .task {
             await store.loadMods(for: draft)
             await store.loadManagedContent(.resourcePacks, for: draft)
@@ -475,6 +485,13 @@ private struct InstanceDetailView: View {
             return "自动选择（推荐 Java \(major)）"
         }
         return "自动选择（按官方版本要求）"
+    }
+
+    private var loaderSummary: String {
+        if draft.loader == .vanilla {
+            return draft.loader.title
+        }
+        return "\(draft.loader.title) \(draft.loaderVersion ?? "")"
     }
 }
 

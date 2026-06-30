@@ -12,39 +12,28 @@ struct SidebarView: View {
             VStack(spacing: 0) {
                 // 上半部分：固定导航 + 动态资源管理
                 List(selection: $store.selection) {
-                    Label(AppSection.downloads.title, systemImage: AppSection.downloads.systemImage)
-                        .tag(AppSection.downloads)
-                    Label(AppSection.settings.title, systemImage: AppSection.settings.systemImage)
-                        .tag(AppSection.settings)
+                    Section("下载") {
+                        sidebarRow(.downloadVersions)
+                        sidebarRow(.downloadTasks)
+                    }
 
-                    if let instance = store.selectedInstance {
-                        Section {
-                            // 模组管理（仅非原版）
-                            if instance.loader != .vanilla {
-                                Label(AppSection.mods.title, systemImage: AppSection.mods.systemImage)
-                                    .tag(AppSection.mods)
-                            }
+                    Section("资源库") {
+                        sidebarRow(.libraryMods)
+                        sidebarRow(.libraryShaders)
+                        sidebarRow(.libraryResourcePacks)
+                        sidebarRow(.libraryDataPacks)
+                        sidebarRow(.libraryModpacks)
+                    }
 
-                            // 资源包（所有实例）
-                            Label(AppSection.resourcePacks.title, systemImage: AppSection.resourcePacks.systemImage)
-                                .tag(AppSection.resourcePacks)
+                    Section("当前实例") {
+                        sidebarRow(.instanceResources)
+                            .disabled(store.selectedInstance == nil)
+                        sidebarRow(.instanceSettings)
+                            .disabled(store.selectedInstance == nil)
+                    }
 
-                            // 光影包（仅支持光影的实例）
-                            let instanceMods = store.mods[instance.id] ?? []
-                            let hasShaders = instance.hasShaderSupport(mods: instanceMods)
-
-                            if hasShaders {
-                                Label(AppSection.shaders.title, systemImage: AppSection.shaders.systemImage)
-                                    .tag(AppSection.shaders)
-                            }
-                        } header: {
-                            Text("当前实例")
-                                .font(.caption2)
-                        }
-                        .task(id: instance.id) {
-                            // 确保加载模组数据
-                            await store.loadMods(for: instance)
-                        }
+                    Section {
+                        sidebarRow(.settings)
                     }
                 }
                 .listStyle(.sidebar)
@@ -69,6 +58,11 @@ struct SidebarView: View {
             InstanceManagementSheet(store: store)
                 .frame(width: 720, height: 540)
         }
+    }
+
+    private func sidebarRow(_ section: AppSection) -> some View {
+        Label(section.title, systemImage: section.systemImage)
+            .tag(section)
     }
 
 }

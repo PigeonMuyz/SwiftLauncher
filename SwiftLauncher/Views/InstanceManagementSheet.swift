@@ -7,6 +7,7 @@ struct InstanceManagementSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ViewState private var selectedIDs: Set<UUID> = []
     @ViewState private var isConfirmingDelete = false
+    @ViewState private var loaderTarget: LauncherInstance?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +28,12 @@ struct InstanceManagementSheet: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("实例目录也会被删除。此操作无法撤销。")
+        }
+        .sheet(item: $loaderTarget) { instance in
+            InstanceLoaderSheet(
+                store: store,
+                instance: store.instances.first { $0.id == instance.id } ?? instance
+            )
         }
     }
 
@@ -68,7 +75,10 @@ struct InstanceManagementSheet: View {
                             InstanceManagementRow(
                                 store: store,
                                 instance: instance,
-                                isSelected: binding(for: instance.id)
+                                isSelected: binding(for: instance.id),
+                                onManageLoader: {
+                                    loaderTarget = instance
+                                }
                             )
                         }
                     }
@@ -177,6 +187,7 @@ private struct InstanceManagementRow: View {
     let store: LauncherStore
     let instance: LauncherInstance
     @Binding var isSelected: Bool
+    let onManageLoader: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -198,6 +209,14 @@ private struct InstanceManagementRow: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.green)
             }
+            Button {
+                onManageLoader()
+            } label: {
+                Label("加载器", systemImage: "puzzlepiece.extension")
+            }
+            .buttonStyle(.borderless)
+            .disabled(store.isWorking(on: instance))
+            .help("安装或更换 Fabric、Forge 等加载器")
             Button {
                 store.selectedInstanceID = instance.id
             } label: {

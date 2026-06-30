@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class LauncherStore {
-    var selection: AppSection = .downloads
+    var selection: AppSection = .downloadVersions
     var manifest: VersionManifest?
     var javaRuntimes: [JavaRuntime] = []
     var instances: [LauncherInstance] = []
@@ -183,7 +183,7 @@ final class LauncherStore {
         )
         instances.append(instance)
         selectedInstanceID = instance.id
-        selection = .downloads
+        selection = .downloadTasks
         isPresentingNewInstance = false
         newInstanceSuggestedVersionID = nil
         await persistInstances()
@@ -517,7 +517,7 @@ final class LauncherStore {
         )
         try? await fileSystem.ensureMinecraftIcon(for: instance.versionID)
         iconRevision += 1
-        selection = .downloads
+        selection = .downloadTasks
         reporter.update(progressRange.upperBound, "安装完成，SHA-1 校验通过", phase: .finalizing)
     }
 
