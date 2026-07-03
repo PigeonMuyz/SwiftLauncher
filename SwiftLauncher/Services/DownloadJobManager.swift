@@ -173,15 +173,15 @@ final class DownloadJobManager {
     }
 }
 
-struct DownloadJobReporter {
-    private let updateHandler: @MainActor (Double, String, DownloadJobPhase?) -> Void
-    private let attachHandler: @MainActor (UUID) -> Void
-    private let checkpointHandler: @MainActor () async throws -> Void
+struct DownloadJobReporter: Sendable {
+    private let updateHandler: @MainActor @Sendable (Double, String, DownloadJobPhase?) -> Void
+    private let attachHandler: @MainActor @Sendable (UUID) -> Void
+    private let checkpointHandler: @MainActor @Sendable () async throws -> Void
 
     init(
-        updateHandler: @escaping @MainActor (Double, String, DownloadJobPhase?) -> Void,
-        attachHandler: @escaping @MainActor (UUID) -> Void,
-        checkpointHandler: @escaping @MainActor () async throws -> Void
+        updateHandler: @escaping @MainActor @Sendable (Double, String, DownloadJobPhase?) -> Void,
+        attachHandler: @escaping @MainActor @Sendable (UUID) -> Void,
+        checkpointHandler: @escaping @MainActor @Sendable () async throws -> Void
     ) {
         self.updateHandler = updateHandler
         self.attachHandler = attachHandler

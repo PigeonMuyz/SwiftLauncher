@@ -266,3 +266,61 @@ func minecraftLaunchEnvironmentStripsMetalDebugVariables() {
     #expect(sanitized["METAL_DEVICE_WRAPPER_TYPE"] == nil)
     #expect(sanitized["MTLCaptureEnabled"] == nil)
 }
+
+@MainActor
+@Test("下载任务暂停会阻塞 checkpoint 到继续")
+func downloadJobPauseBlocksCheckpointUntilResume() async throws {
+    let manager = DownloadJobManager()
+    var checkpointPassed = false
+
+    let result = await manager.run(
+        kind: .gameInstall,
+        title: "Pause Test",
+        detail: "准备测试暂停"
+    ) { reporter in
+        guard let id = manager.jobs.first?.id else { return }
+        manager.pause(id)
+        let checkpointTask = Task { @MainActor in
+            try await reporter.checkpoint()
+            checkpointPassed = true
+        }
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(!checkpointPassed)
+        manager.resume(id)
+        try await checkpointTask.value
+    }
+
+    #expect(result.succeeded)
+    #expect(checkpointPassed)
+}
+
+@MainActor
+@Test("下载任务取消会让 checkpoint 抛出取消")
+func downloadJobCancelMakesCheckpointThrow() async {
+    let manager = DownloadJobManager()
+    var didThrowCancellation = false
+
+    let result = await manager.run(
+        kind: .gameInstall,
+        title: "Cancel Test",
+        detail: "准备测试取消"
+    ) { reporter in
+        guard let id = manager.jobs.first?.id else { return }
+        manager.cancel(id)
+        do {
+            try await reporter.checkpoint()
+        } catch is CancellationError {
+            didThrowCancellation = true
+        } catch {
+            didThrowCancellation = false
+        }
+    }
+
+    if case .cancelled = result {
+        #expect(true)
+    } else {
+        #expect(Bool(false))
+    }
+    #expect(didThrowCancellation)
+}

@@ -456,9 +456,21 @@ actor InstanceImportService {
         try await withThrowingTaskGroup(of: String.self) { group in
             func enqueueNext() {
                 let item = items[nextIndex]
+                let itemNumber = nextIndex + 1
+                let itemStart = 0.12 + 0.82 * Double(nextIndex) / Double(items.count)
+                let itemSpan = 0.82 / Double(max(items.count, 1))
                 nextIndex += 1
                 group.addTask {
-                    try await Self.downloadFirstAvailable(item, downloader: downloader)
+                    try await Self.downloadFirstAvailable(
+                        item,
+                        downloader: downloader,
+                        progress: { value in
+                            try await progress(
+                                itemStart + itemSpan * value,
+                                "正在下载 \(item.path)（\(itemNumber)/\(items.count)）"
+                            )
+                        }
+                    )
                     return item.path
                 }
             }
@@ -489,7 +501,8 @@ actor InstanceImportService {
 
     private static func downloadFirstAvailable(
         _ item: ModrinthDownloadItem,
-        downloader: FileDownloadService
+        downloader: FileDownloadService,
+        progress: FileDownloadService.ProgressHandler? = nil
     ) async throws {
         var lastError: Error = LauncherError.missingDownload(item.path)
         for url in item.downloads {
@@ -498,9 +511,12 @@ actor InstanceImportService {
                     from: url,
                     to: item.destination,
                     expectedSHA1: item.sha1,
-                    expectedSHA512: item.sha512
+                    expectedSHA512: item.sha512,
+                    progress: progress
                 )
                 return
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 lastError = error
             }

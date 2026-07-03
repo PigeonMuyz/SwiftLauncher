@@ -93,16 +93,19 @@ actor JavaRuntimeService {
         await progress?(0.02, "正在查找 Java \(majorVersion) 运行时")
         let asset = try await releaseAsset(majorVersion: majorVersion)
         await progress?(0.04, "正在下载 Java \(majorVersion) · \(asset.architecture)")
-        let archiveData = try await http.data(from: asset.package.link)
-        guard Hashing.sha256(archiveData) == asset.package.checksum.lowercased() else {
-            throw LauncherError.checksumMismatch(asset.package.name)
-        }
-
         try await fileSystem.prepare()
         let downloads = fileSystem.runtimesRoot.appendingPathComponent("downloads", isDirectory: true)
         try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
         let archive = downloads.appendingPathComponent(asset.package.name)
-        try archiveData.write(to: archive, options: [.atomic])
+        try? FileManager.default.removeItem(at: archive)
+        try await http.download(from: asset.package.link, to: archive) { receivedBytes, totalBytes in
+            guard let totalBytes, totalBytes > 0 else { return }
+            let fraction = min(max(Double(receivedBytes) / Double(totalBytes), 0), 1)
+            await progress?(0.04 + 0.03 * fraction, "正在下载 Java \(majorVersion) · \(asset.architecture)")
+        }
+        guard try Hashing.sha256(fileAt: archive) == asset.package.checksum.lowercased() else {
+            throw LauncherError.checksumMismatch(asset.package.name)
+        }
 
         let destination = fileSystem.runtimesRoot.appendingPathComponent(
             "temurin-\(majorVersion)-\(asset.architecture)",

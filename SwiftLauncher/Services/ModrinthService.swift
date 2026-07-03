@@ -167,6 +167,7 @@ private struct ModrinthVersion: Decodable, Sendable {
 
 actor ModrinthService {
     typealias ProgressHandler = @MainActor @Sendable (Double, String) -> Void
+    typealias CheckpointHandler = FileDownloadService.CheckpointHandler
 
     private static let apiRoot = URL(string: "https://api.modrinth.com/v2")!
     private static let headers = [
@@ -225,7 +226,8 @@ actor ModrinthService {
         specificVersionID: String? = nil,
         includeRequiredDependencies: Bool,
         for instance: LauncherInstance,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler? = nil
     ) async throws -> Int {
         guard kind.supportsDirectInstall else {
             throw LauncherError.unsupported(kind.detail)
@@ -240,7 +242,8 @@ actor ModrinthService {
             instance: instance,
             installedProjects: [],
             includeRequiredDependencies: kind == .mods && includeRequiredDependencies,
-            progress: progress
+            progress: progress,
+            checkpoint: checkpoint
         )
         return result.count
     }
@@ -300,8 +303,10 @@ actor ModrinthService {
         project: ModrinthSearchResult,
         specificVersionID: String?,
         instance: LauncherInstance,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler? = nil
     ) async throws -> URL {
+        try await checkpoint?()
         let version: ModrinthVersion
         if let specificVersionID {
             version = try await fetchVersion(id: specificVersionID)
@@ -327,11 +332,19 @@ actor ModrinthService {
             .appendingPathComponent("SwiftLauncher-\(UUID().uuidString)-\(fileName)\(fallbackExtension)")
 
         await progress(0.18, "正在下载 \(version.name) \(version.versionNumber)")
+        try await checkpoint?()
         try await downloader.download(
             from: file.url,
             to: destination,
             expectedSHA1: file.hashes["sha1"],
-            expectedSHA512: file.hashes["sha512"]
+            expectedSHA512: file.hashes["sha512"],
+            progress: { value in
+                progress(
+                    0.18 + 0.82 * value,
+                    "正在下载 \(version.name) \(version.versionNumber)"
+                )
+            },
+            checkpoint: checkpoint
         )
         return destination
     }
@@ -343,10 +356,12 @@ actor ModrinthService {
         instance: LauncherInstance,
         installedProjects: Set<String>,
         includeRequiredDependencies: Bool,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler?
     ) async throws -> (count: Int, projects: Set<String>) {
         var installedProjects = installedProjects
         guard installedProjects.insert(projectID).inserted else { return (0, installedProjects) }
+        try await checkpoint?()
         let version: ModrinthVersion
         if let specificVersionID {
             version = try await fetchVersion(id: specificVersionID)
@@ -380,7 +395,8 @@ actor ModrinthService {
                 instance: instance,
                 installedProjects: installedProjects,
                 includeRequiredDependencies: true,
-                progress: progress
+                progress: progress,
+                checkpoint: checkpoint
             )
             installedCount += dependencyResult.count
             installedProjects = dependencyResult.projects
@@ -398,12 +414,23 @@ actor ModrinthService {
             min(0.15 + Double(installedProjects.count) * 0.12, 0.9),
             "正在安装 \(version.name) \(version.versionNumber)"
         )
+        try await checkpoint?()
+        let baseProgress = min(0.15 + Double(installedProjects.count) * 0.12, 0.9)
+        let span = min(0.08, max(0, 0.96 - baseProgress))
         try await downloader.download(
             from: file.url,
             to: temporaryDestination,
             expectedSHA1: file.hashes["sha1"],
-            expectedSHA512: file.hashes["sha512"]
+            expectedSHA512: file.hashes["sha512"],
+            progress: { value in
+                progress(
+                    baseProgress + span * value,
+                    "正在下载 \(version.name) \(version.versionNumber)"
+                )
+            },
+            checkpoint: checkpoint
         )
+        try await checkpoint?()
         if kind == .mods {
             try await removeInstalledVersions(
                 of: projectID,

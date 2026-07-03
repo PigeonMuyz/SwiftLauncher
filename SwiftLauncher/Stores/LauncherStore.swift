@@ -377,6 +377,8 @@ final class LauncherStore {
                     instance: instance
                 ) { value, detail in
                     reporter.update(value * 0.25, detail, phase: .downloading)
+                } checkpoint: {
+                    try await reporter.checkpoint()
                 }
                 defer { try? FileManager.default.removeItem(at: archive) }
 
@@ -418,6 +420,8 @@ final class LauncherStore {
                 for: instance
             ) { value, detail in
                 reporter.update(value, detail, phase: .downloading)
+            } checkpoint: {
+                try await reporter.checkpoint()
             }
             await refreshInstalledContent(kind, for: instance)
             reporter.update(
@@ -560,13 +564,20 @@ final class LauncherStore {
             progressRange.lowerBound + (progressRange.upperBound - progressRange.lowerBound) * value
         }
 
-        try await installer.install(instance: instance, version: version) { value, detail in
-            reporter.update(
-                scale(value),
-                detail,
-                phase: value < 0.9 ? .downloading : .verifying
-            )
-        }
+        try await installer.install(
+            instance: instance,
+            version: version,
+            progress: { value, detail in
+                reporter.update(
+                    scale(value),
+                    detail,
+                    phase: value < 0.9 ? .downloading : .verifying
+                )
+            },
+            checkpoint: {
+                try await reporter.checkpoint()
+            }
+        )
         javaRuntimes = await javaService.discover(
             additionalPaths: instances.filter { !$0.usesAutomaticJava }.compactMap(\.javaPath)
         )
