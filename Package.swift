@@ -10,7 +10,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "SwiftLauncher",
-            path: "SwiftLauncher"
+            path: "SwiftLauncher",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(
             name: "SwiftLauncherTests",
