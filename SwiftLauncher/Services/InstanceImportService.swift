@@ -7,7 +7,7 @@ struct InstanceImportResult: Sendable {
 }
 
 actor InstanceImportService {
-    typealias ProgressHandler = @MainActor @Sendable (Double, String) -> Void
+    typealias ProgressHandler = @MainActor @Sendable (Double, String) async throws -> Void
 
     private let fileSystem: LauncherFileSystem
     private let downloader: FileDownloadService
@@ -31,7 +31,7 @@ actor InstanceImportService {
     ) async throws -> InstanceImportResult {
         let accessing = sourceURL.startAccessingSecurityScopedResource()
         defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
-        await progress(0.02, "正在解压整合包")
+        try await progress(0.02, "正在解压整合包")
 
         let temporaryRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("SwiftLauncher-Import-\(UUID().uuidString)", isDirectory: true)
@@ -145,17 +145,20 @@ actor InstanceImportService {
         try applyIconData(iconData, to: &instance)
 
         let clientFiles = index.files.filter { $0.env?.client != "unsupported" }
-        for (offset, file) in clientFiles.enumerated() {
+        let downloadItems = try clientFiles.map { file -> ModrinthDownloadItem in
             guard let destination = safeDestination(for: file.path, under: gameDirectory) else {
                 throw LauncherError.unsupported("整合包包含不安全的文件路径：\(file.path)")
             }
-            await progress(
-                0.12 + 0.82 * Double(offset) / Double(max(clientFiles.count, 1)),
-                "正在下载整合包文件（\(offset + 1)/\(clientFiles.count)）"
+            return ModrinthDownloadItem(
+                path: file.path,
+                downloads: file.downloads,
+                sha1: file.hashes["sha1"],
+                sha512: file.hashes["sha512"],
+                destination: destination
             )
-            try await downloadFirstAvailable(file, to: destination)
         }
-        await progress(1, "整合包已导入，启动时会自动补全游戏核心")
+        try await downloadModrinthClientFiles(downloadItems, progress: progress)
+        try await progress(1, "整合包已导入，启动时会自动补全游戏核心")
         return InstanceImportResult(
             instance: instance,
             detail: "已导入 Modrinth 整合包（\(clientFiles.count) 个文件，哈希校验通过）"
@@ -184,10 +187,10 @@ actor InstanceImportService {
             accountID: accountID
         )
         let destination = try prepare(instance)
-        await progress(0.3, "正在复制 Prism/MultiMC 实例文件")
+        try await progress(0.3, "正在复制 Prism/MultiMC 实例文件")
         try copyTreeIfPresent(sourceGame, to: destination, overwrite: true)
         try applyIconData(firstValidIconData(in: [root, sourceGame]), to: &instance)
-        await progress(1, "实例已导入，启动时会校验并补全基础文件")
+        try await progress(1, "实例已导入，启动时会校验并补全基础文件")
         return InstanceImportResult(instance: instance, detail: "已导入 Prism/MultiMC 实例")
     }
 
@@ -212,13 +215,13 @@ actor InstanceImportService {
             accountID: accountID
         )
         let destination = try prepare(instance)
-        await progress(0.45, "正在复制 CurseForge overrides")
+        try await progress(0.45, "正在复制 CurseForge overrides")
         try copyTreeIfPresent(root.appendingPathComponent("overrides"), to: destination, overwrite: true)
         try applyIconData(
             firstValidIconData(in: [root, root.appendingPathComponent("overrides")]),
             to: &instance
         )
-        await progress(1, "已导入本地文件；外部 CurseForge 模组需要 API 凭证")
+        try await progress(1, "已导入本地文件；外部 CurseForge 模组需要 API 凭证")
         let missing = manifest.files.count
         return InstanceImportResult(
             instance: instance,
@@ -235,7 +238,7 @@ actor InstanceImportService {
         knownVersionIDs: Set<String>,
         progress: @escaping ProgressHandler
     ) async throws -> InstanceImportResult {
-        await progress(0.08, "正在识别 Minecraft 与加载器版本")
+        try await progress(0.08, "正在识别 Minecraft 与加载器版本")
         let detected = try detectInstallation(at: source, knownVersionIDs: knownVersionIDs)
         var instance = makeInstance(
             name: suggestedName == ".minecraft" ? "导入的 Minecraft" : suggestedName,
@@ -246,7 +249,7 @@ actor InstanceImportService {
         )
         let destination = try prepare(instance)
 
-        await progress(0.25, "正在复制存档、模组与配置")
+        try await progress(0.25, "正在复制存档、模组与配置")
         for name in Self.instanceDataNames {
             try copyTreeIfPresent(
                 source.appendingPathComponent(name),
@@ -256,7 +259,7 @@ actor InstanceImportService {
         }
         try applyIconData(firstValidIconData(in: [source, source.deletingLastPathComponent()]), to: &instance)
 
-        await progress(0.62, "正在合并可复用的官方资源")
+        try await progress(0.62, "正在合并可复用的官方资源")
         try copyTreeIfPresent(source.appendingPathComponent("assets"), to: fileSystem.assetsRoot, overwrite: false)
         try copyTreeIfPresent(source.appendingPathComponent("libraries"), to: fileSystem.librariesRoot, overwrite: false)
         try copyTreeIfPresent(
@@ -264,7 +267,7 @@ actor InstanceImportService {
             to: fileSystem.versionDirectory(detected.versionID),
             overwrite: false
         )
-        await progress(1, "导入完成；首次启动会校验并补全缺失文件")
+        try await progress(1, "导入完成；首次启动会校验并补全缺失文件")
         return InstanceImportResult(instance: instance, detail: "已导入 .minecraft，官方资源已并入共享缓存")
     }
 
@@ -431,15 +434,71 @@ actor InstanceImportService {
         return game
     }
 
-    private func downloadFirstAvailable(_ file: ModrinthPackIndex.File, to destination: URL) async throws {
-        var lastError: Error = LauncherError.missingDownload(file.path)
-        for url in file.downloads {
+    private func downloadModrinthClientFiles(
+        _ items: [ModrinthDownloadItem],
+        progress: @escaping ProgressHandler
+    ) async throws {
+        guard !items.isEmpty else {
+            try await progress(0.94, "整合包没有需要下载的客户端文件")
+            return
+        }
+
+        let maxConcurrentDownloads = min(8, items.count)
+        var nextIndex = 0
+        var completed = 0
+        let downloader = downloader
+
+        try await progress(
+            0.12,
+            "准备下载 \(items.count) 个整合包文件（最多 \(maxConcurrentDownloads) 个并发）"
+        )
+
+        try await withThrowingTaskGroup(of: String.self) { group in
+            func enqueueNext() {
+                let item = items[nextIndex]
+                nextIndex += 1
+                group.addTask {
+                    try await Self.downloadFirstAvailable(item, downloader: downloader)
+                    return item.path
+                }
+            }
+
+            while nextIndex < maxConcurrentDownloads {
+                enqueueNext()
+            }
+
+            while let finishedPath = try await group.next() {
+                completed += 1
+                let nextDetail: String
+                if nextIndex < items.count {
+                    nextDetail = "已下载 \(finishedPath)，继续 \(items[nextIndex].path)（\(completed)/\(items.count)）"
+                } else {
+                    nextDetail = "已下载 \(finishedPath)（\(completed)/\(items.count)）"
+                }
+                try await progress(
+                    0.12 + 0.82 * Double(completed) / Double(max(items.count, 1)),
+                    nextDetail
+                )
+
+                if nextIndex < items.count {
+                    enqueueNext()
+                }
+            }
+        }
+    }
+
+    private static func downloadFirstAvailable(
+        _ item: ModrinthDownloadItem,
+        downloader: FileDownloadService
+    ) async throws {
+        var lastError: Error = LauncherError.missingDownload(item.path)
+        for url in item.downloads {
             do {
                 try await downloader.download(
                     from: url,
-                    to: destination,
-                    expectedSHA1: file.hashes["sha1"],
-                    expectedSHA512: file.hashes["sha512"]
+                    to: item.destination,
+                    expectedSHA1: item.sha1,
+                    expectedSHA512: item.sha512
                 )
                 return
             } catch {
@@ -589,6 +648,14 @@ private struct DetectedInstallation {
     let versionID: String
     let loader: ModLoader
     let loaderVersion: String?
+}
+
+private struct ModrinthDownloadItem: Sendable {
+    let path: String
+    let downloads: [URL]
+    let sha1: String?
+    let sha512: String?
+    let destination: URL
 }
 
 private struct ModrinthPackIndex: Decodable {

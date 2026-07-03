@@ -51,6 +51,10 @@ struct GameLogParser {
                 || message.contains("Created:") && message.contains("textures")
                 || message.contains("Sound engine started")
         }
+
+        var hasGameReadySignal: Bool {
+            message.contains("minecraft:textures/atlas/gui.png-atlas")
+        }
     }
 
     struct GameLoadProgress {
@@ -155,6 +159,18 @@ struct GameLogParser {
             if !errorLines.isEmpty { return errorLines.joined(separator: "\n") }
         }
 
+        if plainText.contains("MTLDebugRenderCommandEncoder")
+            || plainText.contains("failed assertion `Draw Errors Validation") {
+            let lines = plainText.split(separator: "\n", omittingEmptySubsequences: false)
+            if let index = lines.firstIndex(where: {
+                $0.contains("MTLDebugRenderCommandEncoder")
+                    || $0.contains("failed assertion `Draw Errors Validation")
+            }) {
+                let upperBound = min(lines.count, index + 6)
+                return lines[index..<upperBound].joined(separator: "\n")
+            }
+        }
+
         return nil
     }
 
@@ -166,6 +182,7 @@ struct GameLogParser {
     ) -> GameLoadProgress {
         var progress = GameLoadProgress()
         var rendererStarted = false
+        var gameReadySignalSeen = false
 
         for entry in entries {
             if entry.isModLoading {
@@ -187,6 +204,7 @@ struct GameLogParser {
             }
 
             rendererStarted = rendererStarted || entry.hasRendererStarted
+            gameReadySignalSeen = gameReadySignalSeen || entry.hasGameReadySignal
 
             if entry.level == .fatal {
                 progress.hasFatalError = true
@@ -205,7 +223,7 @@ struct GameLogParser {
         }
 
         if !progress.hasFatalError {
-            if gameWindowVisible {
+            if gameWindowVisible && gameReadySignalSeen {
                 progress.currentStage = .ready
                 progress.isGameReady = true
             } else if rendererStarted {
@@ -328,6 +346,8 @@ struct GameLogParser {
             || text.contains("java.lang.NoClassDefFoundError")
             || text.contains("java.lang.UnsatisfiedLinkError")
             || text.contains("Failed to locate library")
+            || text.contains("MTLDebugRenderCommandEncoder")
+            || text.contains("failed assertion `Draw Errors Validation")
     }
 
     private static func decodeXMLText(_ text: String) -> String {

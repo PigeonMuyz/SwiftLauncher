@@ -257,7 +257,7 @@ private struct InstancePickerList: View {
     @Binding var showingInstanceManagement: Bool
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(spacing: 8) {
                 ForEach(store.instances.filter { $0.id != store.selectedInstanceID }) { instance in
                     Button {

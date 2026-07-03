@@ -37,6 +37,7 @@ struct SidebarView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .scrollIndicators(.hidden)
 
                 SidebarBottomPanel(
                     store: store,

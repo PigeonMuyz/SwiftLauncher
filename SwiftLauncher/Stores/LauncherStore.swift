@@ -223,6 +223,7 @@ final class LauncherStore {
                 knownVersionIDs: Set(manifest?.versions.map(\.id) ?? [])
             ) { value, detail in
                 reporter.update(value * 0.64, detail, phase: .importing)
+                try await reporter.checkpoint()
             }
             await registerImportedInstance(result.instance)
             reporter.attachToInstance(result.instance.id)
@@ -251,6 +252,7 @@ final class LauncherStore {
                 knownVersionIDs: Set(manifest?.versions.map(\.id) ?? [])
             ) { value, detail in
                 reporter.update(value * 0.64, detail, phase: .importing)
+                try await reporter.checkpoint()
             }
             await registerImportedInstance(result.instance)
             reporter.attachToInstance(result.instance.id)
@@ -385,6 +387,7 @@ final class LauncherStore {
                     knownVersionIDs: Set(manifest?.versions.map(\.id) ?? [])
                 ) { value, detail in
                     reporter.update(0.28 + value * 0.34, detail, phase: .importing)
+                    try await reporter.checkpoint()
                 }
                 await registerImportedInstance(result.instance)
                 reporter.attachToInstance(result.instance.id)
@@ -646,16 +649,19 @@ final class LauncherStore {
         busyInstances.insert(instance.id)
         defer { busyInstances.remove(instance.id) }
 
+        let showsLoadingWindow = shouldShowGameLoadingWindow
+        if showsLoadingWindow {
+            openGameLoadingWindow(for: instance)
+        }
+
         do {
             let result = try await launcher.launch(instance: instance, account: account, java: java)
             gameProcessID = result.processIdentifier
             runningInstanceID = instance.id
             let launchedProcessID = result.processIdentifier
 
-            // 打开加载窗口并开始监控日志
-            openGameLoadingWindow(for: instance)
-            if shouldShowGameLoadingWindow {
-                startLogMonitoring()
+            if showsLoadingWindow {
+                finishGameLoadingHandshake()
             } else {
                 bringGameWindowToFront()
             }
@@ -682,6 +688,7 @@ final class LauncherStore {
             }
             loadLog()
         } catch {
+            closeGameLoadingWindow()
             present(error)
         }
     }
@@ -1006,6 +1013,18 @@ final class LauncherStore {
         downloadManager.clearCompleted()
     }
 
+    func pauseDownload(_ id: UUID) {
+        downloadManager.pause(id)
+    }
+
+    func resumeDownload(_ id: UUID) {
+        downloadManager.resume(id)
+    }
+
+    func cancelDownload(_ id: UUID) {
+        downloadManager.cancel(id)
+    }
+
     private func preferredRuntime(forVersionID versionID: String) -> JavaRuntime? {
         if let data = try? Data(contentsOf: fileSystem.versionJSON(versionID)),
            let metadata = try? JSONCoding.makeDecoder().decode(VersionMetadata.self, from: data),
@@ -1110,8 +1129,23 @@ final class LauncherStore {
     private func openGameLoadingWindow(for instance: LauncherInstance) {
         gameLoadingInstanceID = instance.id
         gameLaunchStartedAt = .now
-        gameLoadProgress = .init(currentStage: .startingGame, totalProgress: 0.05)
+        gameLoadProgress = .init(currentStage: .startingGame, totalProgress: 0.82)
         openGameLoadingWindow()
+    }
+
+    private func finishGameLoadingHandshake() {
+        gameLoadProgress = .init(
+            currentStage: .ready,
+            totalProgress: 1,
+            isGameReady: true
+        )
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            await MainActor.run {
+                self?.closeGameLoadingWindow()
+                self?.bringGameWindowToFront()
+            }
+        }
     }
 
     private func closeGameLoadingWindow() {
@@ -1128,81 +1162,6 @@ final class LauncherStore {
         UserDefaults.standard.object(forKey: GameLoadingWindowPreference.defaultsKey) as? Bool ?? true
     }
 
-    private func startLogMonitoring() {
-        stopLogMonitoring() // 确保之前的任务已停止
-
-        logMonitorTask = Task { [weak self] in
-            guard let self else { return }
-
-            let logURL = fileSystem.latestLogURL()
-            var previousEntryCount = 0
-            var didScheduleReadyClose = false
-            var didScheduleFailureClose = false
-
-            while !Task.isCancelled {
-                // 读取日志内容
-                guard let data = try? Data(contentsOf: logURL),
-                      let content = String(data: data, encoding: .utf8) else {
-                    try? await Task.sleep(for: .milliseconds(500))
-                    continue
-                }
-
-                // 解析日志
-                let (entries, newCount) = GameLogParser.parseLogStream(content, previousEntryCount: previousEntryCount)
-                let (previousProgress, startedAt, processID) = await MainActor.run {
-                    (self.gameLoadProgress.totalProgress, self.gameLaunchStartedAt ?? .now, self.gameProcessID)
-                }
-                let elapsedTime = Date().timeIntervalSince(startedAt)
-                let gameWindowVisible = processID.map(Self.hasVisibleGameWindow(processID:)) ?? false
-                let nextProgress = GameLogParser.analyzeLoadProgress(
-                    entries,
-                    previousProgress: previousProgress,
-                    elapsedTime: elapsedTime,
-                    gameWindowVisible: gameWindowVisible
-                )
-
-                if newCount > 0 || nextProgress.totalProgress != previousProgress || nextProgress.isGameReady {
-                    await MainActor.run {
-                        self.gameLoadProgress = nextProgress
-
-                        // 检测游戏是否已准备好
-                        if self.gameLoadProgress.isGameReady && !didScheduleReadyClose {
-                            didScheduleReadyClose = true
-                            // 延迟关闭加载窗口，让用户看到"完成"状态
-                            Task {
-                                try? await Task.sleep(for: .milliseconds(1200))
-                                await MainActor.run {
-                                    self.closeGameLoadingWindow()
-                                    self.stopLogMonitoring()
-                                    // 将游戏窗口置前
-                                    self.bringGameWindowToFront()
-                                }
-                            }
-                        }
-
-                        // 检测致命错误
-                        if self.gameLoadProgress.hasFatalError && !didScheduleFailureClose {
-                            didScheduleFailureClose = true
-                            // 延迟关闭加载窗口，让用户看到错误状态
-                            Task {
-                                try? await Task.sleep(for: .seconds(3))
-                                await MainActor.run {
-                                    self.closeGameLoadingWindow()
-                                    self.stopLogMonitoring()
-                                    // 自动打开日志窗口
-                                    self.shouldOpenGameLog = true
-                                }
-                            }
-                        }
-                    }
-                    previousEntryCount = entries.count
-                }
-
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
-    }
-
     private func stopLogMonitoring() {
         logMonitorTask?.cancel()
         logMonitorTask = nil
@@ -1211,11 +1170,15 @@ final class LauncherStore {
     private func bringGameWindowToFront() {
         // 尝试将游戏窗口置于前台
         guard let processID = gameProcessID else { return }
+        if let app = NSRunningApplication(processIdentifier: processID) {
+            app.unhide()
+        }
 
         // 使用 AppleScript 激活进程，这会自动将窗口置前
         let script = """
         tell application "System Events"
             try
+                set visible of first process whose unix id is \(processID) to true
                 set frontmost of first process whose unix id is \(processID) to true
             end try
         end tell
@@ -1232,29 +1195,12 @@ final class LauncherStore {
         // 备用方法：通过 NSRunningApplication 激活
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             if let app = NSRunningApplication(processIdentifier: processID) {
+                app.unhide()
                 app.activate(options: [.activateAllWindows])
             }
         }
     }
 
-    nonisolated private static func hasVisibleGameWindow(processID: Int32) -> Bool {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return false
-        }
-        return windows.contains { window in
-            guard let ownerPID = window[kCGWindowOwnerPID as String] as? Int,
-                  ownerPID == Int(processID),
-                  let layer = window[kCGWindowLayer as String] as? Int,
-                  layer == 0,
-                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let width = bounds["Width"] as? Double,
-                  let height = bounds["Height"] as? Double else {
-                return false
-            }
-            return width > 160 && height > 120
-        }
-    }
 }
 
 private extension Int {
