@@ -71,6 +71,7 @@ enum InstallationIssue: LocalizedError, Sendable {
 
 actor MinecraftInstaller {
     typealias ProgressHandler = @MainActor @Sendable (Double, String) -> Void
+    typealias CheckpointHandler = FileDownloadService.CheckpointHandler
 
     private let metadataService: MojangMetadataService
     private let downloader: FileDownloadService
@@ -95,7 +96,8 @@ actor MinecraftInstaller {
     func install(
         instance: LauncherInstance,
         version: MinecraftVersion,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler? = nil
     ) async throws {
         try await fileSystem.prepare()
         let instanceRoot = fileSystem.instanceRoot(instance.id)
@@ -108,9 +110,11 @@ actor MinecraftInstaller {
         }
 
         await progress(0.01, "正在读取 \(version.id) 元数据")
+        try await checkpoint?()
         let metadata = try await loadMetadata(for: version)
         let metadataData = try JSONCoding.makeEncoder().encode(metadata)
         try metadataData.write(to: fileSystem.versionJSON(version.id), options: [.atomic])
+        try await checkpoint?()
 
         let requiredJava = metadata.javaVersion?.majorVersion ?? 8
         let java = try await javaService.ensureRuntime(
@@ -130,15 +134,18 @@ actor MinecraftInstaller {
 
         if let issue = baseCheck.issue {
             await progress(0.08, "正在修复官方基础版本：\(issue.repairDetail)")
+            try await checkpoint?()
             try await installBaseVersion(
                 version: version,
                 metadata: metadata,
                 metadataData: metadataData,
                 libraries: allowedLibraries,
-                progress: progress
+                progress: progress,
+                checkpoint: checkpoint
             )
         } else {
             await progress(0.45, "官方基础版本 \(version.id) 已存在，正在复用")
+            try await checkpoint?()
         }
 
         // Use the game's own pack.png as the default instance artwork. This is
@@ -150,11 +157,13 @@ actor MinecraftInstaller {
             try await installNatives(
                 libraries: allowedLibraries,
                 destination: nativesDirectory,
-                progress: progress
+                progress: progress,
+                checkpoint: checkpoint
             )
         }
 
         if let assetIndexReference = metadata.assetIndex {
+            try await checkpoint?()
             let indexURL = assetIndexURL(assetIndexReference.id)
             let assetIndex = try JSONCoding.makeDecoder().decode(AssetIndex.self, from: Data(contentsOf: indexURL))
             try materializeLegacyAssets(index: assetIndex, indexID: assetIndexReference.id, gameDirectory: gameDirectory)
@@ -163,9 +172,14 @@ actor MinecraftInstaller {
         if instance.loader != .vanilla, !loaderInstallationIsComplete(instance) {
             switch instance.loader {
             case .fabric, .quilt:
-                try await installMetadataLoader(for: instance, progress: progress)
+                try await installMetadataLoader(for: instance, progress: progress, checkpoint: checkpoint)
             case .forge, .neoForge:
-                try await installInstallerLoader(for: instance, java: java, progress: progress)
+                try await installInstallerLoader(
+                    for: instance,
+                    java: java,
+                    progress: progress,
+                    checkpoint: checkpoint
+                )
             case .vanilla:
                 break
             }
@@ -187,6 +201,7 @@ actor MinecraftInstaller {
         try JSONCoding.makeEncoder().encode(marker)
             .write(to: fileSystem.installationMarker(instance.id), options: [.atomic])
         await progress(1, "安装完成，所有文件已校验")
+        try await checkpoint?()
     }
 
     func installationIsComplete(
@@ -278,16 +293,22 @@ actor MinecraftInstaller {
         metadata: VersionMetadata,
         metadataData: Data,
         libraries: [MinecraftLibrary],
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler?
     ) async throws {
         guard let client = metadata.downloads?["client"] else {
             throw LauncherError.missingDownload("client")
         }
         await progress(0.10, "正在补全官方游戏核心")
+        try await checkpoint?()
         try await downloader.download(
             from: client.url,
             to: fileSystem.versionJAR(version.id),
-            expectedSHA1: client.sha1
+            expectedSHA1: client.sha1,
+            progress: { value in
+                progress(0.10 + 0.04 * value, "正在下载官方游戏核心")
+            },
+            checkpoint: checkpoint
         )
 
         let libraryArtifacts = libraries.compactMap { library -> (DownloadArtifact, URL)? in
@@ -300,14 +321,17 @@ actor MinecraftInstaller {
             baseProgress: 0.14,
             span: 0.30,
             label: "正在补全官方依赖库",
-            progress: progress
+            progress: progress,
+            checkpoint: checkpoint
         )
 
         if let assetIndexReference = metadata.assetIndex {
             await progress(0.48, "正在读取官方资源索引")
+            try await checkpoint?()
             let indexData = try await downloader.data(
                 from: assetIndexReference.url,
-                expectedSHA1: assetIndexReference.sha1
+                expectedSHA1: assetIndexReference.sha1,
+                checkpoint: checkpoint
             )
             try indexData.write(to: assetIndexURL(assetIndexReference.id), options: [.atomic])
 
@@ -321,6 +345,7 @@ actor MinecraftInstaller {
                 )
             }
             await progress(0.50, "正在检查本地官方资源")
+            try await checkpoint?()
             let assetPlan = reusableDownloadPlan(objects, validation: .sizeOnly)
             try await downloadInBatches(
                 assetPlan.items,
@@ -330,13 +355,19 @@ actor MinecraftInstaller {
                 reusedCount: assetPlan.reused,
                 concurrency: 48,
                 existingFileValidation: .sizeOnly,
-                progress: progress
+                progress: progress,
+                checkpoint: checkpoint
             )
         }
 
         if let clientLogging = metadata.logging?["client"], let file = clientLogging.file {
             let destination = loggingConfigurationURL(file)
-            try await downloader.download(from: file.url, to: destination, expectedSHA1: file.sha1)
+            try await downloader.download(
+                from: file.url,
+                to: destination,
+                expectedSHA1: file.sha1,
+                checkpoint: checkpoint
+            )
         }
 
         let marker = BaseInstallationMarker(
@@ -570,16 +601,19 @@ actor MinecraftInstaller {
         reusedCount: Int = 0,
         concurrency: Int = 16,
         existingFileValidation: FileDownloadService.ExistingFileValidation = .checksum,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler?
     ) async throws {
         guard !items.isEmpty else {
             let reusedText = reusedCount > 0 ? "，复用 \(reusedCount) 个" : ""
             await progress(baseProgress + span, "\(label)（无需下载\(reusedText)）")
+            try await checkpoint?()
             return
         }
         let maxConcurrentDownloads = max(1, min(concurrency, items.count))
         var completed = 0
         var nextIndex = 0
+        try await checkpoint?()
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<maxConcurrentDownloads {
@@ -591,7 +625,8 @@ actor MinecraftInstaller {
                         to: item.1,
                         expectedSize: item.0.size,
                         expectedSHA1: item.0.sha1,
-                        existingFileValidation: existingFileValidation
+                        existingFileValidation: existingFileValidation,
+                        checkpoint: checkpoint
                     )
                 }
             }
@@ -604,6 +639,7 @@ actor MinecraftInstaller {
                     baseProgress + span * fraction,
                     "\(label)（\(completed)/\(items.count)\(reusedText)）"
                 )
+                try await checkpoint?()
 
                 if nextIndex < items.count {
                     let item = items[nextIndex]
@@ -614,7 +650,8 @@ actor MinecraftInstaller {
                             to: item.1,
                             expectedSize: item.0.size,
                             expectedSHA1: item.0.sha1,
-                            existingFileValidation: existingFileValidation
+                            existingFileValidation: existingFileValidation,
+                            checkpoint: checkpoint
                         )
                     }
                 }
@@ -654,7 +691,8 @@ actor MinecraftInstaller {
     private func installNatives(
         libraries: [MinecraftLibrary],
         destination: URL,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler?
     ) async throws {
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -670,8 +708,20 @@ actor MinecraftInstaller {
         }
 
         for (index, item) in nativeArtifacts.enumerated() {
-            await progress(0.41 + (Double(index) / Double(max(nativeArtifacts.count, 1))) * 0.06, "正在准备原生库")
-            try await downloader.download(from: item.0.url, to: item.1, expectedSHA1: item.0.sha1)
+            let base = 0.41 + (Double(index) / Double(max(nativeArtifacts.count, 1))) * 0.06
+            let span = 0.06 / Double(max(nativeArtifacts.count, 1))
+            await progress(base, "正在准备原生库")
+            try await checkpoint?()
+            try await downloader.download(
+                from: item.0.url,
+                to: item.1,
+                expectedSHA1: item.0.sha1,
+                progress: { value in
+                    progress(base + span * value, "正在下载原生库 \(item.1.lastPathComponent)")
+                },
+                checkpoint: checkpoint
+            )
+            try await checkpoint?()
             try extractArchive(item.1, to: destination)
         }
 
@@ -707,12 +757,14 @@ actor MinecraftInstaller {
 
     private func installMetadataLoader(
         for instance: LauncherInstance,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler?
     ) async throws {
         guard let loaderVersion = instance.loaderVersion else {
             throw LauncherError.unsupported("没有选择 \(instance.loader.title) 版本")
         }
         await progress(0.93, "正在读取 \(instance.loader.title) \(loaderVersion)")
+        try await checkpoint?()
         let profile = try await loaderService.profile(
             for: instance.versionID,
             loader: instance.loader,
@@ -741,7 +793,8 @@ actor MinecraftInstaller {
             baseProgress: 0.94,
             span: 0.05,
             label: "正在下载 \(instance.loader.title) 依赖",
-            progress: progress
+            progress: progress,
+            checkpoint: checkpoint
         )
         try JSONCoding.makeEncoder().encode(profile)
             .write(to: fileSystem.loaderProfile(instance.id), options: [.atomic])
@@ -750,7 +803,8 @@ actor MinecraftInstaller {
     private func installInstallerLoader(
         for instance: LauncherInstance,
         java: JavaRuntime,
-        progress: @escaping ProgressHandler
+        progress: @escaping ProgressHandler,
+        checkpoint: CheckpointHandler?
     ) async throws {
         guard let loaderVersion = instance.loaderVersion else {
             throw LauncherError.unsupported("没有选择 \(instance.loader.title) 版本")
@@ -775,20 +829,34 @@ actor MinecraftInstaller {
         }
 
         await progress(0.93, "正在下载 \(instance.loader.title) 安装器")
-        let checksumData = try await downloader.data(from: installerURL.appendingPathExtension("sha1"))
+        try await checkpoint?()
+        let checksumData = try await downloader.data(
+            from: installerURL.appendingPathExtension("sha1"),
+            checkpoint: checkpoint
+        )
         let checksum = String(decoding: checksumData, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let installer = fileSystem.instanceRoot(instance.id)
             .appendingPathComponent("\(instance.loader.rawValue)-installer.jar")
-        try await downloader.download(from: installerURL, to: installer, expectedSHA1: checksum)
+        try await downloader.download(
+            from: installerURL,
+            to: installer,
+            expectedSHA1: checksum,
+            progress: { value in
+                progress(0.93 + 0.03 * value, "正在下载 \(instance.loader.title) 安装器")
+            },
+            checkpoint: checkpoint
+        )
 
         await progress(0.96, "正在运行 \(instance.loader.title) 官方安装器")
+        try await checkpoint?()
         try ensureLauncherProfilesExist()
         let before = Set((try? FileManager.default.contentsOfDirectory(atPath: fileSystem.versionsRoot.path)) ?? [])
         let mirrorCandidates = installerMirrors(for: instance.loader)
         var installerLogs: [String] = []
         var installed = false
         for mirror in mirrorCandidates {
+            try await checkpoint?()
             let result = try runLoaderInstaller(
                 javaPath: java.path,
                 installer: installer,

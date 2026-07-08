@@ -80,7 +80,7 @@ struct ContentView: View {
 
     private var navigationTitle: String {
         switch store.selection {
-        case .downloadVersions, .instanceResources:
+        case .downloadVersions, .downloadTasks, .instanceResources:
             ""
         default:
             store.selection.title

@@ -70,6 +70,58 @@ func sha512IsStable() {
     )
 }
 
+@Test("Modrinth 项目级不兼容依赖会提示当前已安装模组")
+func modrinthProjectIncompatibilityWarnsInstalledMod() {
+    let notices = ModrinthCompatibilityNotice.incompatibilityNotices(
+        dependencies: [
+            ModrinthCompatibilityDependency(
+                projectID: "sodium",
+                versionID: nil,
+                slug: "sodium",
+                title: "Sodium",
+                versionNumber: nil
+            )
+        ],
+        installedMods: [
+            ModrinthInstalledModReference(
+                projectID: "sodium",
+                versionID: "sodium-0.6.13",
+                title: "Sodium",
+                versionNumber: "0.6.13"
+            )
+        ]
+    )
+
+    #expect(notices.count == 1)
+    #expect(notices[0].detail.contains("Sodium 0.6.13"))
+    #expect(notices[0].detail.contains("可能不兼容"))
+}
+
+@Test("Modrinth 版本级不兼容依赖只匹配明确版本")
+func modrinthVersionIncompatibilityOnlyWarnsMatchingInstalledVersion() {
+    let notices = ModrinthCompatibilityNotice.incompatibilityNotices(
+        dependencies: [
+            ModrinthCompatibilityDependency(
+                projectID: "sodium",
+                versionID: "sodium-0.6.13",
+                slug: "sodium",
+                title: "Sodium",
+                versionNumber: "0.6.13"
+            )
+        ],
+        installedMods: [
+            ModrinthInstalledModReference(
+                projectID: "sodium",
+                versionID: "sodium-0.6.12",
+                title: "Sodium",
+                versionNumber: "0.6.12"
+            )
+        ]
+    )
+
+    #expect(notices.isEmpty)
+}
+
 @Test("BMCLAPI 路径映射覆盖版本、资源和依赖")
 func bmclEndpointMapping() {
     let manifest = URL(string: "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")!
@@ -203,4 +255,124 @@ func rendererLogDoesNotMeanGameReady() {
     let progress = GameLogParser.analyzeLoadProgress(entries, elapsedTime: 20, gameWindowVisible: false)
     #expect(!progress.isGameReady)
     #expect(progress.currentStage == .waitingForWindow)
+}
+
+@Test("Forge 早期窗口可见不代表游戏完全启动")
+func forgeEarlyWindowDoesNotMeanGameReady() {
+    let log = """
+    [INFO] [main/EARLYDISPLAY] Requested GL version 4.1 got version 4.1
+    [INFO] [pool-2-thread-1/EARLYDISPLAY] GL info: Apple M1 Pro GL version 4.1 Metal - 91.6, Apple
+    [INFO] [main/net.minecraftforge.fml.loading.moddiscovery.ModDiscoverer] Found mod file jei.jar of type MOD
+    """
+    let entries = GameLogParser.parseLogStream(log).entries
+    let progress = GameLogParser.analyzeLoadProgress(entries, elapsedTime: 20, gameWindowVisible: true)
+    #expect(!progress.isGameReady)
+    #expect(progress.currentStage == .loadingMods)
+}
+
+@Test("启动日志中的 Java module 异常会被识别为失败")
+func javaModuleResolutionExceptionIsFatal() {
+    let log = """
+    Exception in thread "main" java.lang.module.ResolutionException: Modules minecraft and _1._20._1 export package net.minecraft.client to module fabric_asm_generated_classes
+    at java.base/java.lang.module.Resolver.resolveFail(Unknown Source)
+    """
+    let entries = GameLogParser.parseLogStream(log).entries
+    let progress = GameLogParser.analyzeLoadProgress(entries, elapsedTime: 20, gameWindowVisible: true)
+    #expect(progress.hasFatalError)
+    #expect(!progress.isGameReady)
+    #expect(progress.currentStage == .failed)
+}
+
+@Test("Metal 调试断言会被识别为启动失败")
+func metalDebugAssertionIsFatal() {
+    let log = """
+    [INFO] [Render thread/net.minecraft.client.sounds.SoundEngine] Sound engine started
+    [INFO] [Render thread/net.minecraft.client.renderer.texture.TextureAtlas] Created: 1024x1024x0 minecraft:textures/atlas/gui.png-atlas
+    -[MTLDebugRenderCommandEncoder validateCommonDrawErrors:]:6032: failed assertion `Draw Errors Validation
+    Fragment Function(main0): argument _26[0] from Buffer(1) with offset(0) and length(12) has space for 12 bytes, but argument has a length(16).
+    '
+    """
+    let entries = GameLogParser.parseLogStream(log).entries
+    let progress = GameLogParser.analyzeLoadProgress(entries, elapsedTime: 20, gameWindowVisible: true)
+    #expect(progress.hasFatalError)
+    #expect(!progress.isGameReady)
+    #expect(progress.currentStage == .failed)
+    #expect(GameLogParser.extractFatalError(log)?.contains("MTLDebugRenderCommandEncoder") == true)
+}
+
+@Test("启动 Minecraft 时不会继承 Metal 调试环境变量")
+func minecraftLaunchEnvironmentStripsMetalDebugVariables() {
+    let environment = [
+        "PATH": "/usr/bin",
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+        "METAL_DEVICE_WRAPPER_TYPE": "1",
+        "MTLCaptureEnabled": "1",
+        "MTL_HUD_ENABLED": "1"
+    ]
+    let sanitized = MinecraftLauncher.sanitizedProcessEnvironment(environment)
+    #expect(sanitized["PATH"] == "/usr/bin")
+    #expect(sanitized["MTL_HUD_ENABLED"] == "1")
+    #expect(sanitized["MTL_DEBUG_LAYER"] == nil)
+    #expect(sanitized["MTL_SHADER_VALIDATION"] == nil)
+    #expect(sanitized["METAL_DEVICE_WRAPPER_TYPE"] == nil)
+    #expect(sanitized["MTLCaptureEnabled"] == nil)
+}
+
+@MainActor
+@Test("下载任务暂停会阻塞 checkpoint 到继续")
+func downloadJobPauseBlocksCheckpointUntilResume() async throws {
+    let manager = DownloadJobManager()
+    var checkpointPassed = false
+
+    let result = await manager.run(
+        kind: .gameInstall,
+        title: "Pause Test",
+        detail: "准备测试暂停"
+    ) { reporter in
+        guard let id = manager.jobs.first?.id else { return }
+        manager.pause(id)
+        let checkpointTask = Task { @MainActor in
+            try await reporter.checkpoint()
+            checkpointPassed = true
+        }
+
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(!checkpointPassed)
+        manager.resume(id)
+        try await checkpointTask.value
+    }
+
+    #expect(result.succeeded)
+    #expect(checkpointPassed)
+}
+
+@MainActor
+@Test("下载任务取消会让 checkpoint 抛出取消")
+func downloadJobCancelMakesCheckpointThrow() async {
+    let manager = DownloadJobManager()
+    var didThrowCancellation = false
+
+    let result = await manager.run(
+        kind: .gameInstall,
+        title: "Cancel Test",
+        detail: "准备测试取消"
+    ) { reporter in
+        guard let id = manager.jobs.first?.id else { return }
+        manager.cancel(id)
+        do {
+            try await reporter.checkpoint()
+        } catch is CancellationError {
+            didThrowCancellation = true
+        } catch {
+            didThrowCancellation = false
+        }
+    }
+
+    if case .cancelled = result {
+        #expect(true)
+    } else {
+        #expect(Bool(false))
+    }
+    #expect(didThrowCancellation)
 }

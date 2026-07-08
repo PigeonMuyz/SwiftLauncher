@@ -85,13 +85,9 @@ struct InstanceDetailView: View {
     @Bindable var store: LauncherStore
     @ViewState private var draft: LauncherInstance
     @ViewState private var isConfirmingDelete = false
-    @ViewState private var isImportingMods = false
-    @ViewState private var isImportingResourcePacks = false
-    @ViewState private var isImportingShaderPacks = false
     @ViewState private var isSelectingIcon = false
     @ViewState private var isSelectingJava = false
     @ViewState private var isManagingLoader = false
-    @ViewState private var modPendingDeletion: ModFile?
 
     init(store: LauncherStore, instance: LauncherInstance) {
         self.store = store
@@ -221,78 +217,6 @@ struct InstanceDetailView: View {
                         }
                     }
 
-                    Section("模组") {
-                        if draft.loader == .vanilla {
-                            Text("原版实例可以保存模组文件，但启动模组通常需要 Fabric 或 Quilt。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else if draft.loader == .fabric {
-                            Text("Fabric Loader \(draft.loaderVersion ?? "") 已作为游戏加载器安装；Fabric API 是独立模组，需要时可在“下载 → 模组”中安装。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if store.mods[draft.id, default: []].isEmpty {
-                            Text("尚未导入模组")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(store.mods[draft.id, default: []]) { mod in
-                                HStack {
-                                    Button {
-                                        Task { await store.setMod(mod, enabled: !mod.isEnabled, for: draft) }
-                                    } label: {
-                                        Image(systemName: mod.isEnabled ? "checkmark.circle.fill" : "circle")
-                                            .foregroundStyle(mod.isEnabled ? .green : .secondary)
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    RemoteImageIconView(
-                                        url: mod.iconURL,
-                                        systemImage: "puzzlepiece.extension.fill",
-                                        tint: .secondary,
-                                        padding: 6
-                                    )
-                                    .frame(width: 30, height: 30)
-                                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(mod.displayName)
-                                            .lineLimit(1)
-                                        Text(mod.detailText)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    Spacer()
-                                    Button(role: .destructive) {
-                                        modPendingDeletion = mod
-                                    } label: {
-                                        Image(systemName: "trash")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-                        }
-
-                        Button {
-                            isImportingMods = true
-                        } label: {
-                            Label("导入模组 JAR", systemImage: "square.and.arrow.down")
-                        }
-                    }
-
-                    managedContentSection(
-                        kind: .resourcePacks,
-                        files: store.resourcePacks[draft.id, default: []],
-                        systemImage: "photo.on.rectangle.angled"
-                    )
-
-                    managedContentSection(
-                        kind: .shaderPacks,
-                        files: store.shaderPacks[draft.id, default: []],
-                        systemImage: "sun.max.trianglebadge.exclamationmark"
-                    )
                 }
                 .formStyle(.grouped)
 
@@ -320,51 +244,6 @@ struct InstanceDetailView: View {
         .confirmationDialog("删除“\(draft.name)”及其全部游戏文件？", isPresented: $isConfirmingDelete) {
             Button("删除", role: .destructive) {
                 Task { await store.deleteInstance(draft) }
-            }
-        }
-        .confirmationDialog(
-            "移除模组“\(modPendingDeletion?.displayName ?? "")”？",
-            isPresented: Binding(
-                get: { modPendingDeletion != nil },
-                set: { if !$0 { modPendingDeletion = nil } }
-            )
-        ) {
-            Button("移除", role: .destructive) {
-                if let mod = modPendingDeletion {
-                    Task { await store.removeMod(mod, for: draft) }
-                }
-                modPendingDeletion = nil
-            }
-        }
-        .fileImporter(
-            isPresented: $isImportingMods,
-            allowedContentTypes: [UTType(filenameExtension: "jar") ?? .data],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                Task { await store.importMods(urls, for: draft) }
-            }
-        }
-        .fileImporter(
-            isPresented: $isImportingResourcePacks,
-            allowedContentTypes: [.zip, .folder],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                Task {
-                    await store.importManagedContent(urls, kind: .resourcePacks, for: draft)
-                }
-            }
-        }
-        .fileImporter(
-            isPresented: $isImportingShaderPacks,
-            allowedContentTypes: [.zip, .folder],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                Task {
-                    await store.importManagedContent(urls, kind: .shaderPacks, for: draft)
-                }
             }
         }
         .fileImporter(
@@ -395,11 +274,6 @@ struct InstanceDetailView: View {
             InstanceLoaderSheet(store: store, instance: draft) { updated in
                 draft = updated
             }
-        }
-        .task {
-            await store.loadMods(for: draft)
-            await store.loadManagedContent(.resourcePacks, for: draft)
-            await store.loadManagedContent(.shaderPacks, for: draft)
         }
     }
 
@@ -447,55 +321,6 @@ struct InstanceDetailView: View {
         .tint(.green)
         .controlSize(.large)
         .disabled(store.isWorking(on: draft) || store.gameProcessID != nil)
-    }
-
-    @ViewBuilder
-    private func managedContentSection(
-        kind: ManagedContentKind,
-        files: [ManagedContentFile],
-        systemImage: String
-    ) -> some View {
-        Section(kind.title) {
-            if files.isEmpty {
-                Text("尚未导入\(kind.title)")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(files) { file in
-                    HStack(spacing: 10) {
-                        Image(systemName: systemImage)
-                            .foregroundStyle(.green)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(file.displayName)
-                                .lineLimit(1)
-                            Text(file.detailText)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        Button(role: .destructive) {
-                            Task {
-                                await store.removeManagedContent(file, kind: kind, for: draft)
-                            }
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                }
-            }
-
-            Button {
-                switch kind {
-                case .resourcePacks:
-                    isImportingResourcePacks = true
-                case .shaderPacks:
-                    isImportingShaderPacks = true
-                }
-            } label: {
-                Label("导入\(kind.title)", systemImage: "square.and.arrow.down")
-            }
-        }
     }
 
     private var automaticJavaLabel: String {

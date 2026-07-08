@@ -79,58 +79,70 @@ struct DownloadsView: View {
     }
 
     private var taskList: some View {
-        Group {
-            if store.downloads.isEmpty {
-                ContentUnavailableView {
-                    Label("没有下载任务", systemImage: "arrow.down.circle")
-                } description: {
-                    Text("游戏、模组和导入任务的真实进度会显示在这里。")
-                }
-            } else {
-                VStack(spacing: 0) {
-                    VStack(spacing: 10) {
-                        HStack {
-                            Text("任务队列")
-                                .font(.headline)
-                            if !store.activeDownloads.isEmpty {
-                                Text("\(store.activeDownloads.count) 个进行中")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.green)
-                            }
-                            Spacer()
-                            Picker("任务筛选", selection: $taskFilter) {
-                                ForEach(DownloadTaskFilter.allCases) { filter in
-                                    Text(filter.title).tag(filter)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                            .frame(width: 360)
-                            Button("清除已完成") { store.clearCompletedDownloads() }
-                                .disabled(store.downloads.allSatisfy(\.isActive))
-                        }
-
-                        HStack(spacing: 18) {
-                            taskMetric("全部", value: store.downloads.count, color: .secondary)
-                            taskMetric("进行中", value: store.activeDownloads.count, color: .blue)
-                            taskMetric("失败", value: store.downloads.filter { $0.state == .failed }.count, color: .red)
-                            taskMetric("已完成", value: store.downloads.filter { $0.state == .completed }.count, color: .green)
-                            Spacer()
-                        }
-                    }
-                    .padding(14)
-                    Divider()
-                    if filteredDownloads.isEmpty {
+        TabView(selection: $taskFilter) {
+            ForEach(DownloadTaskFilter.allCases) { filter in
+                Group {
+                    if store.downloads.isEmpty {
                         ContentUnavailableView {
-                            Label("没有\(taskFilter.title)任务", systemImage: taskFilter.systemImage)
+                            Label("没有下载任务", systemImage: "arrow.down.circle")
+                        } description: {
+                            Text("游戏、模组和导入任务的真实进度会显示在这里。")
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        List(filteredDownloads) { task in
-                            taskRow(task)
+                        VStack(spacing: 0) {
+                            taskSummaryHeader
+                            Divider()
+                            taskPane(for: filter)
                         }
                     }
                 }
+                .tabItem {
+                    Text(filter.title)
+                }
+                .tag(filter)
+            }
+        }
+        .tabViewStyle(.automatic)
+    }
+
+    private var taskSummaryHeader: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("任务队列")
+                    .font(.headline)
+                if !store.activeDownloads.isEmpty {
+                    Text("\(store.activeDownloads.count) 个进行中")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+                Spacer()
+                Button("清除已完成") { store.clearCompletedDownloads() }
+                    .disabled(!store.downloads.contains { $0.state == .completed || $0.state == .cancelled })
+            }
+
+            HStack(spacing: 18) {
+                taskMetric("全部", value: store.downloads.count, color: .secondary)
+                taskMetric("进行中", value: store.activeDownloads.count, color: .blue)
+                taskMetric("已暂停", value: store.downloads.filter { $0.state == .paused }.count, color: .orange)
+                taskMetric("失败", value: store.downloads.filter { $0.state == .failed }.count, color: .red)
+                taskMetric("已完成", value: store.downloads.filter { $0.state == .completed }.count, color: .green)
+                Spacer()
+            }
+        }
+        .padding(14)
+    }
+
+    @ViewBuilder
+    private func taskPane(for filter: DownloadTaskFilter) -> some View {
+        let tasks = downloads(for: filter)
+        if tasks.isEmpty {
+            ContentUnavailableView {
+                Label("没有\(filter.title)任务", systemImage: filter.systemImage)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(tasks) { task in
+                taskRow(task)
             }
         }
     }
@@ -158,8 +170,8 @@ struct DownloadsView: View {
         }
     }
 
-    private var filteredDownloads: [DownloadTaskInfo] {
-        switch taskFilter {
+    private func downloads(for filter: DownloadTaskFilter) -> [DownloadTaskInfo] {
+        switch filter {
         case .all:
             store.downloads
         case .active:
@@ -199,6 +211,7 @@ struct DownloadsView: View {
                 Spacer()
                 Text(task.state.title)
                     .foregroundStyle(.secondary)
+                taskControls(for: task)
             }
             HStack(spacing: 8) {
                 Text(task.phase.title)
@@ -209,9 +222,9 @@ struct DownloadsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
-            if task.state == .downloading || task.state == .queued {
+            if task.state == .downloading || task.state == .queued || task.state == .paused {
                 ProgressView(value: task.progress)
-                    .tint(.green)
+                    .tint(task.state == .paused ? .orange : .green)
             }
             if let error = task.errorMessage {
                 Text(error)
@@ -223,10 +236,44 @@ struct DownloadsView: View {
         .padding(.vertical, 8)
     }
 
+    @ViewBuilder
+    private func taskControls(for task: DownloadTaskInfo) -> some View {
+        if task.isActive {
+            HStack(spacing: 4) {
+                if task.state == .paused {
+                    Button {
+                        store.resumeDownload(task.id)
+                    } label: {
+                        Image(systemName: "play.fill")
+                    }
+                    .help("继续任务")
+                } else {
+                    Button {
+                        store.pauseDownload(task.id)
+                    } label: {
+                        Image(systemName: "pause.fill")
+                    }
+                    .help("暂停任务")
+                }
+
+                Button {
+                    store.cancelDownload(task.id)
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .help("取消任务")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .foregroundStyle(.secondary)
+        }
+    }
+
     private func color(for state: DownloadState) -> Color {
         switch state {
         case .completed: .green
         case .failed: .red
+        case .paused: .orange
         case .downloading: .blue
         case .queued, .cancelled: .secondary
         }

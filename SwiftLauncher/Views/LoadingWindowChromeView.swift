@@ -19,9 +19,10 @@ struct LoadingWindowChromeView: NSViewRepresentable {
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
         window.isOpaque = false
-        window.hasShadow = true
-        window.styleMask.insert(.fullSizeContentView)
-        window.styleMask.remove(.resizable)
+        window.hasShadow = false
+        window.styleMask = [.borderless]
+        window.collectionBehavior.insert(.transient)
+        window.level = .floating
 
         [
             NSWindow.ButtonType.closeButton,

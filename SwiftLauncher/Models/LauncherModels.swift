@@ -257,6 +257,7 @@ struct JavaRuntime: Identifiable, Hashable, Sendable {
 enum DownloadState: String, Sendable {
     case queued
     case downloading
+    case paused
     case completed
     case failed
     case cancelled
@@ -265,6 +266,7 @@ enum DownloadState: String, Sendable {
         switch self {
         case .queued: "等待中"
         case .downloading: "下载中"
+        case .paused: "已暂停"
         case .completed: "已完成"
         case .failed: "失败"
         case .cancelled: "已取消"
@@ -376,7 +378,7 @@ struct DownloadTaskInfo: Identifiable, Sendable {
     }
 
     var isActive: Bool {
-        state == .queued || state == .downloading
+        state == .queued || state == .downloading || state == .paused
     }
 }
 

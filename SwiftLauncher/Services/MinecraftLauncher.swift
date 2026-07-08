@@ -72,7 +72,7 @@ actor MinecraftLauncher {
         process.executableURL = URL(fileURLWithPath: java.path)
         process.arguments = command
         process.currentDirectoryURL = fileSystem.gameDirectory(instance)
-        process.environment = ProcessInfo.processInfo.environment
+        process.environment = Self.sanitizedProcessEnvironment(ProcessInfo.processInfo.environment)
         process.standardOutput = logHandle
         process.standardError = logHandle
         process.terminationHandler = { [weak self] terminated in
@@ -114,6 +114,15 @@ actor MinecraftLauncher {
             terminations[identifier] = termination
         } else {
             for waiter in waiters { waiter.resume(returning: termination) }
+        }
+    }
+
+    static func sanitizedProcessEnvironment(_ environment: [String: String]) -> [String: String] {
+        environment.filter { key, _ in
+            !key.hasPrefix("MTL_DEBUG")
+                && !key.hasPrefix("MTL_SHADER_VALIDATION")
+                && key != "METAL_DEVICE_WRAPPER_TYPE"
+                && key != "MTLCaptureEnabled"
         }
     }
 
@@ -159,7 +168,9 @@ actor MinecraftLauncher {
 
         // 去重：对于同一个库的多个版本，只保留最高版本
         var classpath = uniqueLibraryPaths(allLibraryPaths)
-        classpath.append(fileSystem.versionJAR(instance.versionID).path)
+        if installerLoaderMetadata == nil {
+            classpath.append(fileSystem.versionJAR(instance.versionID).path)
+        }
 
         let accessToken: String
         if account.kind == .microsoft {
