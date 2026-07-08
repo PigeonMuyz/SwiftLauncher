@@ -47,8 +47,15 @@ struct ModrinthInstallPlan: Identifiable, Sendable {
     let versionName: String
     let versionNumber: String
     let requiredDependencies: [ModrinthDependencyPlan]
+    let compatibilityNotices: [ModrinthCompatibilityNotice]
 
     var id: String { project.projectID }
+
+    var compatibilityConfirmationMessage: String {
+        let details = compatibilityNotices.prefix(4).map(\.detail).joined(separator: "\n")
+        let overflow = compatibilityNotices.count > 4 ? "\n另有 \(compatibilityNotices.count - 4) 条提示未列出。" : ""
+        return "\(details)\(overflow)\n\n是否仍要下载？"
+    }
 }
 
 struct ModrinthDependencyPlan: Identifiable, Sendable {
@@ -63,6 +70,65 @@ struct ModrinthDependencyPlan: Identifiable, Sendable {
 
     var id: String { "\(projectID):\(versionID)" }
     var projectURL: URL { URL(string: "https://modrinth.com/mod/\(slug)")! }
+}
+
+struct ModrinthCompatibilityDependency: Identifiable, Hashable, Sendable {
+    let projectID: String
+    let versionID: String?
+    let slug: String
+    let title: String
+    let versionNumber: String?
+
+    var id: String { versionID ?? projectID }
+    var displayName: String {
+        [title, versionNumber].compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }
+        .joined(separator: " ")
+    }
+}
+
+struct ModrinthInstalledModReference: Identifiable, Hashable, Sendable {
+    let projectID: String
+    let versionID: String
+    let title: String
+    let versionNumber: String
+
+    var id: String { "\(projectID):\(versionID)" }
+    var displayName: String {
+        [title, versionNumber].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+}
+
+struct ModrinthCompatibilityNotice: Identifiable, Hashable, Sendable {
+    let dependency: ModrinthCompatibilityDependency
+    let installedMod: ModrinthInstalledModReference
+
+    var id: String { "\(dependency.id):\(installedMod.id)" }
+
+    var detail: String {
+        if dependency.versionNumber == nil && installedMod.title == dependency.title {
+            return "当前已安装的 \(installedMod.displayName) 根据版本信息可能不兼容。"
+        }
+        return "当前已安装的 \(installedMod.displayName) 与 \(dependency.displayName) 根据版本信息可能不兼容。"
+    }
+
+    static func incompatibilityNotices(
+        dependencies: [ModrinthCompatibilityDependency],
+        installedMods: [ModrinthInstalledModReference]
+    ) -> [ModrinthCompatibilityNotice] {
+        dependencies.flatMap { dependency in
+            installedMods.compactMap { installedMod in
+                if let versionID = dependency.versionID {
+                    guard installedMod.versionID == versionID else { return nil }
+                } else {
+                    guard installedMod.projectID == dependency.projectID else { return nil }
+                }
+                return ModrinthCompatibilityNotice(dependency: dependency, installedMod: installedMod)
+            }
+        }
+    }
 }
 
 struct ModrinthVersionOption: Identifiable, Hashable, Sendable {
@@ -277,6 +343,8 @@ actor ModrinthService {
 
         var visited: Set<String> = [project.projectID]
         var dependencies: [ModrinthDependencyPlan] = []
+        var compatibilityDependencies: [ModrinthCompatibilityDependency] = []
+        let installedMods = kind == .mods ? installedModReferences(for: instance) : []
         if kind == .mods {
             try await collectRequiredDependencies(
                 of: version,
@@ -286,6 +354,7 @@ actor ModrinthService {
                 visited: &visited,
                 output: &dependencies
             )
+            compatibilityDependencies = await collectIncompatibleDependencies(of: version)
         }
         return ModrinthInstallPlan(
             kind: kind,
@@ -295,7 +364,11 @@ actor ModrinthService {
             versionID: version.id,
             versionName: version.name,
             versionNumber: version.versionNumber,
-            requiredDependencies: dependencies
+            requiredDependencies: dependencies,
+            compatibilityNotices: ModrinthCompatibilityNotice.incompatibilityNotices(
+                dependencies: compatibilityDependencies,
+                installedMods: installedMods
+            )
         )
     }
 
@@ -500,6 +573,53 @@ actor ModrinthService {
                 depth: depth + 1,
                 visited: &visited,
                 output: &output
+            )
+        }
+    }
+
+    private func collectIncompatibleDependencies(
+        of version: ModrinthVersion
+    ) async -> [ModrinthCompatibilityDependency] {
+        var output: [ModrinthCompatibilityDependency] = []
+        for dependency in version.dependencies where dependency.dependencyType == "incompatible" {
+            if let versionID = dependency.versionID,
+               let dependencyVersion = try? await fetchVersion(id: versionID) {
+                let projectID = dependency.projectID ?? dependencyVersion.projectID
+                let project = try? await fetchProject(id: projectID)
+                output.append(
+                    ModrinthCompatibilityDependency(
+                        projectID: projectID,
+                        versionID: versionID,
+                        slug: project?.slug ?? projectID,
+                        title: project?.title ?? projectID,
+                        versionNumber: dependencyVersion.versionNumber
+                    )
+                )
+            } else if let projectID = dependency.projectID {
+                let project = try? await fetchProject(id: projectID)
+                output.append(
+                    ModrinthCompatibilityDependency(
+                        projectID: projectID,
+                        versionID: nil,
+                        slug: project?.slug ?? projectID,
+                        title: project?.title ?? projectID,
+                        versionNumber: nil
+                    )
+                )
+            }
+        }
+        return output
+    }
+
+    private func installedModReferences(for instance: LauncherInstance) -> [ModrinthInstalledModReference] {
+        let modsDirectory = contentDirectory(for: .mods, instance: instance)
+        let index = ModrinthInstalledModsIndexStore.load(from: modsDirectory)
+        return index.records.values.map { record in
+            ModrinthInstalledModReference(
+                projectID: record.projectID,
+                versionID: record.versionID,
+                title: record.title,
+                versionNumber: record.versionNumber
             )
         }
     }

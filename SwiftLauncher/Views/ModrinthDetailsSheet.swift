@@ -6,6 +6,7 @@ struct ModrinthDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(LauncherExperienceMode.defaultsKey) private var experienceMode = LauncherExperienceMode.beginner.rawValue
     @AppStorage(LauncherExperienceMode.autoDependenciesDefaultsKey) private var autoInstallRequiredMods = true
+    @State private var isConfirmingCompatibilityRisk = false
 
     private var plan: ModrinthInstallPlan? {
         store.modInstallPlan
@@ -109,6 +110,18 @@ struct ModrinthDetailsSheet: View {
                         }
 
                         if plan.kind == .mods {
+                            if !plan.compatibilityNotices.isEmpty {
+                                Section("兼容性提示") {
+                                    Label("根据版本信息，可能不支持。", systemImage: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                    ForEach(plan.compatibilityNotices) { notice in
+                                        Text(notice.detail)
+                                            .font(.callout)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+
                             Section("必需前置 Mod（\(plan.requiredDependencies.count)）") {
                                 if plan.requiredDependencies.isEmpty {
                                     Text("此版本没有声明必需前置。")
@@ -167,14 +180,10 @@ struct ModrinthDetailsSheet: View {
                         Spacer()
                         Button("取消") { dismiss() }
                         Button(installButtonTitle) {
-                            dismiss()
-                            Task {
-                                await store.installModrinthContent(
-                                    plan.kind,
-                                    plan.project,
-                                    for: instance,
-                                    specificVersionID: plan.selectedVersionID
-                                )
+                            if plan.compatibilityNotices.isEmpty {
+                                beginInstall(plan)
+                            } else {
+                                isConfirmingCompatibilityRisk = true
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -189,6 +198,27 @@ struct ModrinthDetailsSheet: View {
             }
         }
         .frame(width: 780, height: 680)
+        .alert("根据版本信息，可能不支持", isPresented: $isConfirmingCompatibilityRisk) {
+            Button("取消", role: .cancel) {}
+            Button("仍要下载") {
+                guard let plan else { return }
+                beginInstall(plan)
+            }
+        } message: {
+            Text(plan?.compatibilityConfirmationMessage ?? "是否仍要下载？")
+        }
+    }
+
+    private func beginInstall(_ plan: ModrinthInstallPlan) {
+        dismiss()
+        Task {
+            await store.installModrinthContent(
+                plan.kind,
+                plan.project,
+                for: instance,
+                specificVersionID: plan.selectedVersionID
+            )
+        }
     }
 
     private func installLocationText(for plan: ModrinthInstallPlan, instance: LauncherInstance) -> String {

@@ -70,6 +70,58 @@ func sha512IsStable() {
     )
 }
 
+@Test("Modrinth 项目级不兼容依赖会提示当前已安装模组")
+func modrinthProjectIncompatibilityWarnsInstalledMod() {
+    let notices = ModrinthCompatibilityNotice.incompatibilityNotices(
+        dependencies: [
+            ModrinthCompatibilityDependency(
+                projectID: "sodium",
+                versionID: nil,
+                slug: "sodium",
+                title: "Sodium",
+                versionNumber: nil
+            )
+        ],
+        installedMods: [
+            ModrinthInstalledModReference(
+                projectID: "sodium",
+                versionID: "sodium-0.6.13",
+                title: "Sodium",
+                versionNumber: "0.6.13"
+            )
+        ]
+    )
+
+    #expect(notices.count == 1)
+    #expect(notices[0].detail.contains("Sodium 0.6.13"))
+    #expect(notices[0].detail.contains("可能不兼容"))
+}
+
+@Test("Modrinth 版本级不兼容依赖只匹配明确版本")
+func modrinthVersionIncompatibilityOnlyWarnsMatchingInstalledVersion() {
+    let notices = ModrinthCompatibilityNotice.incompatibilityNotices(
+        dependencies: [
+            ModrinthCompatibilityDependency(
+                projectID: "sodium",
+                versionID: "sodium-0.6.13",
+                slug: "sodium",
+                title: "Sodium",
+                versionNumber: "0.6.13"
+            )
+        ],
+        installedMods: [
+            ModrinthInstalledModReference(
+                projectID: "sodium",
+                versionID: "sodium-0.6.12",
+                title: "Sodium",
+                versionNumber: "0.6.12"
+            )
+        ]
+    )
+
+    #expect(notices.isEmpty)
+}
+
 @Test("BMCLAPI 路径映射覆盖版本、资源和依赖")
 func bmclEndpointMapping() {
     let manifest = URL(string: "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")!

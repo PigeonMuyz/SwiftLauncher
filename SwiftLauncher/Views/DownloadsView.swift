@@ -79,53 +79,57 @@ struct DownloadsView: View {
     }
 
     private var taskList: some View {
-        Group {
-            if store.downloads.isEmpty {
-                ContentUnavailableView {
-                    Label("没有下载任务", systemImage: "arrow.down.circle")
-                } description: {
-                    Text("游戏、模组和导入任务的真实进度会显示在这里。")
-                }
-            } else {
-                VStack(spacing: 0) {
-                    VStack(spacing: 10) {
-                        HStack {
-                            Text("任务队列")
-                                .font(.headline)
-                            if !store.activeDownloads.isEmpty {
-                                Text("\(store.activeDownloads.count) 个进行中")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.green)
-                            }
-                            Spacer()
-                            Button("清除已完成") { store.clearCompletedDownloads() }
-                                .disabled(!store.downloads.contains { $0.state == .completed || $0.state == .cancelled })
+        TabView(selection: $taskFilter) {
+            ForEach(DownloadTaskFilter.allCases) { filter in
+                Group {
+                    if store.downloads.isEmpty {
+                        ContentUnavailableView {
+                            Label("没有下载任务", systemImage: "arrow.down.circle")
+                        } description: {
+                            Text("游戏、模组和导入任务的真实进度会显示在这里。")
                         }
-
-                        HStack(spacing: 18) {
-                            taskMetric("全部", value: store.downloads.count, color: .secondary)
-                            taskMetric("进行中", value: store.activeDownloads.count, color: .blue)
-                            taskMetric("已暂停", value: store.downloads.filter { $0.state == .paused }.count, color: .orange)
-                            taskMetric("失败", value: store.downloads.filter { $0.state == .failed }.count, color: .red)
-                            taskMetric("已完成", value: store.downloads.filter { $0.state == .completed }.count, color: .green)
-                            Spacer()
-                        }
-                    }
-                    .padding(14)
-                    Divider()
-                    TabView(selection: $taskFilter) {
-                        ForEach(DownloadTaskFilter.allCases) { filter in
+                    } else {
+                        VStack(spacing: 0) {
+                            taskSummaryHeader
+                            Divider()
                             taskPane(for: filter)
-                                .tabItem {
-                                    Text(filter.title)
-                                }
-                                .tag(filter)
                         }
                     }
-                    .tabViewStyle(.automatic)
                 }
+                .tabItem {
+                    Text(filter.title)
+                }
+                .tag(filter)
             }
         }
+        .tabViewStyle(.automatic)
+    }
+
+    private var taskSummaryHeader: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("任务队列")
+                    .font(.headline)
+                if !store.activeDownloads.isEmpty {
+                    Text("\(store.activeDownloads.count) 个进行中")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
+                Spacer()
+                Button("清除已完成") { store.clearCompletedDownloads() }
+                    .disabled(!store.downloads.contains { $0.state == .completed || $0.state == .cancelled })
+            }
+
+            HStack(spacing: 18) {
+                taskMetric("全部", value: store.downloads.count, color: .secondary)
+                taskMetric("进行中", value: store.activeDownloads.count, color: .blue)
+                taskMetric("已暂停", value: store.downloads.filter { $0.state == .paused }.count, color: .orange)
+                taskMetric("失败", value: store.downloads.filter { $0.state == .failed }.count, color: .red)
+                taskMetric("已完成", value: store.downloads.filter { $0.state == .completed }.count, color: .green)
+                Spacer()
+            }
+        }
+        .padding(14)
     }
 
     @ViewBuilder
